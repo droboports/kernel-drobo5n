@@ -1,0 +1,5 @@
+config SHARED_MEM 
+        int "Shared memory driver"
+	help
+	  Select the sharem memory intercore kernel driver 
+

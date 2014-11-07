@@ -3,6 +3,10 @@ kernel-drobo5n
 
 Kernel source code for the Drobo5N
 
+Obtained from [here](http://support.drobo.com/app/answers/detail/a_id/434).
+
+## How to compile modules
+
 In the `kernel` folder:
 
 ```

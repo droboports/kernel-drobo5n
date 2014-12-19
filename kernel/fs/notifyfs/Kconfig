@@ -1,0 +1,9 @@
+config NOTIFY_FS
+	tristate "Notify stackable file system (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	help
+	  Notifyfs is a stackable file system which simply passes its
+	  operations to the lower layer.  It also forwards the filesystem
+	  events through a netlink socket to user space.
+	  It is based on wrapfs (see Documentation/filesystems/wrapfs.txt).
+	  See <http://wrapfs.filesystems.org/> for details.

@@ -4,4 +4,4 @@ EXTRA_CFLAGS += -DNOTIFYFS_VERSION=\"$(NOTIFYFS_VERSION)\"
 
 obj-$(CONFIG_NOTIFY_FS) += notifyfs.o
 
-notifyfs-y := dentry.o file.o inode.o main.o super.o lookup.o mmap.o
+notifyfs-y := dentry.o file.o inode.o main.o super.o lookup.o mmap.o notifier.o

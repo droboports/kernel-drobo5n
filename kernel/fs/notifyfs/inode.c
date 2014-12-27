@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -39,6 +40,11 @@ static int notifyfs_create(struct inode *dir, struct dentry *dentry,
 		goto out;
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(FileCreate, lower_dentry);
+	/* end notifier support */
 
 out:
 	mnt_drop_write(lower_path.mnt);
@@ -82,6 +88,12 @@ static int notifyfs_link(struct dentry *old_dentry, struct inode *dir,
 	set_nlink(old_dentry->d_inode,
 		  notifyfs_lower_inode(old_dentry->d_inode)->i_nlink);
 	i_size_write(new_dentry->d_inode, file_size_save);
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(FileCreate, lower_new_dentry);
+	/* end notifier support */
+
 out:
 	mnt_drop_write(lower_new_path.mnt);
 out_unlock:
@@ -126,6 +138,12 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
 		  notifyfs_lower_inode(dentry->d_inode)->i_nlink);
 	dentry->d_inode->i_ctime = dir->i_ctime;
 	d_drop(dentry); /* this is needed, else LTP fails (VFS won't do it) */
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(FileDelete, lower_dentry);
+	/* end notifier support */
+
 out:
 	mnt_drop_write(lower_path.mnt);
 out_unlock:
@@ -158,6 +176,11 @@ static int notifyfs_symlink(struct inode *dir, struct dentry *dentry,
 		goto out;
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(FileCreate, lower_dentry);
+	/* end notifier support */
 
 out:
 	mnt_drop_write(lower_path.mnt);
@@ -194,6 +217,11 @@ static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	/* update number of links on parent directory */
 	set_nlink(dir, notifyfs_lower_inode(dir)->i_nlink);
 
+	/* notifier support */
+	UDBG;
+	send_dentry_event(DirectoryCreate, lower_dentry);
+	/* end notifier support */
+
 out:
 	mnt_drop_write(lower_path.mnt);
 out_unlock:
@@ -226,6 +254,11 @@ static int notifyfs_rmdir(struct inode *dir, struct dentry *dentry)
 	fsstack_copy_attr_times(dir, lower_dir_dentry->d_inode);
 	fsstack_copy_inode_size(dir, lower_dir_dentry->d_inode);
 	set_nlink(dir, lower_dir_dentry->d_inode->i_nlink);
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(DirectoryDelete, lower_dentry);
+	/* end notifier support */
 
 out:
 	mnt_drop_write(lower_path.mnt);
@@ -282,6 +315,11 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct dentry *lower_new_dir_dentry = NULL;
 	struct dentry *trap = NULL;
 	struct path lower_old_path, lower_new_path;
+	/* notifier support */
+	int bufferLength = 4096;
+	char *bufferName;
+	char *oldName;
+	/* end notifier support */
 
 	notifyfs_get_lower_path(old_dentry, &lower_old_path);
 	notifyfs_get_lower_path(new_dentry, &lower_new_path);
@@ -309,6 +347,17 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	if (err)
 		goto out_drop_old_write;
 
+	/* notifier support */
+	// We have to save the name before forwading the rename call because
+	// the old name gets overwritten.
+	bufferName = kmalloc(bufferLength, GFP_KERNEL);
+	oldName = dentry_path_raw(lower_old_dentry, bufferName, bufferLength);
+	if (IS_ERR(oldName)) {
+		err = PTR_ERR(oldName);
+		goto out;
+	}
+	/* end notifier support */
+
 	err = vfs_rename(lower_old_dir_dentry->d_inode, lower_old_dentry,
 			 lower_new_dir_dentry->d_inode, lower_new_dentry);
 	if (err)
@@ -323,6 +372,15 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 					lower_old_dir_dentry->d_inode);
 	}
 
+	/* notifier support */
+	UDBG;
+	if (S_ISDIR(lower_old_dentry->d_inode->i_mode)) {
+		send_dentry_rename(DirectoryMove, lower_old_dentry, oldName);
+	} else {
+		send_dentry_rename(FileMove, lower_old_dentry, oldName);
+	}
+	/* end notifier support */
+
 out_err:
 	mnt_drop_write(lower_new_path.mnt);
 out_drop_old_write:
@@ -333,6 +391,11 @@ out:
 	dput(lower_new_dir_dentry);
 	notifyfs_put_lower_path(old_dentry, &lower_old_path);
 	notifyfs_put_lower_path(new_dentry, &lower_new_path);
+	/* notifier support */
+	if (bufferName) {
+		kfree(bufferName);
+	}
+	/* end notifier support */
 	return err;
 }
 
@@ -399,6 +462,17 @@ static void notifyfs_put_link(struct dentry *dentry, struct nameidata *nd,
 		kfree(buf);
 }
 
+/**
+ * inode_permission - Check for access rights to a given inode
+ * @inode: Inode to check permission on
+ * @mask: Right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC)
+ *
+ * Check for read/write/execute permissions on an inode.  We use fs[ug]id for
+ * this, letting us set arbitrary permissions for filesystem access without
+ * changing the "normal" UIDs which are used for other things.
+ *
+ * When checking for MAY_APPEND, MAY_WRITE must also be set in @mask.
+ */
 static int notifyfs_permission(struct inode *inode, int mask)
 {
 	struct inode *lower_inode;
@@ -480,6 +554,11 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 * lower_inode should update its size.
 	 */
 
+	/* notifier support */
+	UDBG;
+	send_dentry_event(SetAttribute, lower_dentry);
+	/* end notifier support */
+
 out:
 	notifyfs_put_lower_path(dentry, &lower_path);
 out_err:
@@ -503,6 +582,14 @@ notifyfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 
 	err = lower_dentry->d_inode->i_op->setxattr(lower_dentry,
 						    name, value, size, flags);
+	if (err)
+		goto out;
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(SetAttribute, lower_dentry);
+	/* end notifier support */
+
 out:
 	notifyfs_put_lower_path(dentry, &lower_path);
 	return err;
@@ -570,10 +657,19 @@ notifyfs_removexattr(struct dentry *dentry, const char *name)
 
 	err = lower_dentry->d_inode->i_op->removexattr(lower_dentry,
 						       name);
+	if (err)
+		goto out;
+
+	/* notifier support */
+	UDBG;
+	send_dentry_event(SetAttribute, lower_dentry);
+	/* end notifier support */
+
 out:
 	notifyfs_put_lower_path(dentry, &lower_path);
 	return err;
 }
+
 const struct inode_operations notifyfs_symlink_iops = {
 	.readlink	= notifyfs_readlink,
 	.permission	= notifyfs_permission,

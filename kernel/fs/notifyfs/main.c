@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -127,11 +128,11 @@ struct dentry *notifyfs_mount(struct file_system_type *fs_type, int flags,
 }
 
 static struct file_system_type notifyfs_fs_type = {
-	.owner		= THIS_MODULE,
-	.name		= NOTIFYFS_NAME,
-	.mount		= notifyfs_mount,
-	.kill_sb	= generic_shutdown_super,
-	.fs_flags	= FS_REVAL_DOT,
+	.owner    = THIS_MODULE,
+	.name     = NOTIFYFS_NAME,
+	.mount    = notifyfs_mount,
+	.kill_sb  = generic_shutdown_super,
+	.fs_flags = FS_REVAL_DOT,
 };
 
 static int __init init_notifyfs_fs(void)
@@ -147,6 +148,7 @@ static int __init init_notifyfs_fs(void)
 	if (err)
 		goto out;
 	err = register_filesystem(&notifyfs_fs_type);
+
 out:
 	if (err) {
 		notifyfs_destroy_inode_cache();
@@ -163,10 +165,10 @@ static void __exit exit_notifyfs_fs(void)
 	pr_info("Completed notifyfs module unload\n");
 }
 
-MODULE_AUTHOR("Ricardo Padilha, Drobo Inc"
+MODULE_AUTHOR("Ricardo Padilha for Drobo Inc"
 	      " (http://www.drobo.com/)");
 MODULE_DESCRIPTION("Notifyfs " NOTIFYFS_VERSION
-		   " (http://notifyfs.drobo.com/)");
+		   " (http://www.drobo.com/)");
 MODULE_LICENSE("GPL");
 
 module_init(init_notifyfs_fs);

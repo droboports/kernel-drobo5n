@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -44,6 +45,13 @@ static ssize_t notifyfs_write(struct file *file, const char __user *buf,
 		fsstack_copy_attr_times(dentry->d_inode,
 					lower_file->f_path.dentry->d_inode);
 	}
+
+  /* notifier support */
+  if (err >= 0) {
+    UDBG;
+    send_file_event(FileModify, lower_file);
+  }
+  /* end notifier support */
 
 	return err;
 }
@@ -316,6 +324,14 @@ static ssize_t notifyfs_aio_write(struct kiocb *iocb, const struct iovec *iov,
 		fsstack_copy_attr_times(file->f_path.dentry->d_inode,
 					lower_file->f_path.dentry->d_inode);
 	}
+
+  /* notifier support */
+  if (err >= 0 || err == -EIOCBQUEUED) {
+    UDBG;
+    send_file_event(FileModify, lower_file);
+  }
+  /* end notifier support */
+
 out:
 	return err;
 }

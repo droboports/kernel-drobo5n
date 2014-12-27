@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -26,6 +27,9 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+
+/* Notification support */
+#include "notifier.h"
 
 /* the file system name */
 #define NOTIFYFS_NAME "notifyfs"

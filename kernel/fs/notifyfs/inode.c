@@ -42,8 +42,8 @@ static int notifyfs_create(struct inode *dir, struct dentry *dentry,
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(FileCreate, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, FileCreate, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -90,8 +90,8 @@ static int notifyfs_link(struct dentry *old_dentry, struct inode *dir,
 	i_size_write(new_dentry->d_inode, file_size_save);
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(FileCreate, lower_new_dentry);
+//	UDBG;
+	err = send_dentry_event(old_dentry->d_sb, FileCreate, lower_new_dentry);
 	/* end notifier support */
 
 out:
@@ -128,7 +128,7 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
 	 * we just need to detect them here and treat such EBUSY errors as
 	 * if the upper file was successfully deleted.
 	 */
-	if (err == -EBUSY && lower_dentry->d_flags & DCACHE_NFSFS_RENAMED)
+	if (err == -EBUSY && (lower_dentry->d_flags & DCACHE_NFSFS_RENAMED))
 		err = 0;
 	if (err)
 		goto out;
@@ -140,8 +140,8 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
 	d_drop(dentry); /* this is needed, else LTP fails (VFS won't do it) */
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(FileDelete, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, FileDelete, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -178,8 +178,8 @@ static int notifyfs_symlink(struct inode *dir, struct dentry *dentry,
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(FileCreate, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, FileCreate, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -218,8 +218,8 @@ static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	set_nlink(dir, notifyfs_lower_inode(dir)->i_nlink);
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(DirectoryCreate, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, DirectoryCreate, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -256,8 +256,8 @@ static int notifyfs_rmdir(struct inode *dir, struct dentry *dentry)
 	set_nlink(dir, lower_dir_dentry->d_inode->i_nlink);
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(DirectoryDelete, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, DirectoryDelete, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -316,9 +316,10 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct dentry *trap = NULL;
 	struct path lower_old_path, lower_new_path;
 	/* notifier support */
-	int bufferLength = 4096;
-	char *bufferName;
+	char *oldNameBuffer = NULL;
 	char *oldName;
+	char *newNameBuffer = NULL;
+	char *newName;
 	/* end notifier support */
 
 	notifyfs_get_lower_path(old_dentry, &lower_old_path);
@@ -348,20 +349,36 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto out_drop_old_write;
 
 	/* notifier support */
-	// We have to save the name before forwading the rename call because
-	// the old name gets overwritten.
-	bufferName = kmalloc(bufferLength, GFP_KERNEL);
-	oldName = dentry_path_raw(lower_old_dentry, bufferName, bufferLength);
+	// We have to save the names before forwarding the rename call because
+	// the names get overwritten.
+	oldNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
+	if (oldNameBuffer == NULL) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+	oldName = dentry_path_raw(lower_old_dentry, oldNameBuffer, MAX_PATH_LENGTH);
+	// Can only be -ENAMETOOLONG
 	if (IS_ERR(oldName)) {
 		err = PTR_ERR(oldName);
-		goto out;
+		goto out_free_old_name;
+	}
+	newNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
+	if (newNameBuffer == NULL) {
+		err = -ENOMEM;
+		goto out_free_old_name;
+	}
+	newName = dentry_path_raw(lower_new_dentry, newNameBuffer, MAX_PATH_LENGTH);
+	// Can only be -ENAMETOOLONG
+	if (IS_ERR(newName)) {
+		err = PTR_ERR(newName);
+		goto out_free_new_name;
 	}
 	/* end notifier support */
 
 	err = vfs_rename(lower_old_dir_dentry->d_inode, lower_old_dentry,
 			 lower_new_dir_dentry->d_inode, lower_new_dentry);
 	if (err)
-		goto out_err;
+		goto out_free_new_name;
 
 	fsstack_copy_attr_all(new_dir, lower_new_dir_dentry->d_inode);
 	fsstack_copy_inode_size(new_dir, lower_new_dir_dentry->d_inode);
@@ -373,14 +390,20 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	}
 
 	/* notifier support */
-	UDBG;
+//	UDBG;
 	if (S_ISDIR(lower_old_dentry->d_inode->i_mode)) {
-		send_dentry_rename(DirectoryMove, lower_old_dentry, oldName);
+		err = send_dentry_rename(old_dentry->d_sb, DirectoryMove, lower_old_dentry->d_inode, oldName, newName);
 	} else {
-		send_dentry_rename(FileMove, lower_old_dentry, oldName);
+		err = send_dentry_rename(old_dentry->d_sb, FileMove, lower_old_dentry->d_inode, oldName, newName);
 	}
 	/* end notifier support */
 
+/* notifier support */
+out_free_new_name:
+	kfree(newNameBuffer);
+out_free_old_name:
+	kfree(oldNameBuffer);
+/* end notifier support */
 out_err:
 	mnt_drop_write(lower_new_path.mnt);
 out_drop_old_write:
@@ -391,11 +414,6 @@ out:
 	dput(lower_new_dir_dentry);
 	notifyfs_put_lower_path(old_dentry, &lower_old_path);
 	notifyfs_put_lower_path(new_dentry, &lower_new_path);
-	/* notifier support */
-	if (bufferName) {
-		kfree(bufferName);
-	}
-	/* end notifier support */
 	return err;
 }
 
@@ -555,8 +573,8 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 */
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(SetAttribute, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -586,8 +604,8 @@ notifyfs_setxattr(struct dentry *dentry, const char *name, const void *value,
 		goto out;
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(SetAttribute, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -661,8 +679,8 @@ notifyfs_removexattr(struct dentry *dentry, const char *name)
 		goto out;
 
 	/* notifier support */
-	UDBG;
-	send_dentry_event(SetAttribute, lower_dentry);
+//	UDBG;
+	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
 	/* end notifier support */
 
 out:

@@ -13,6 +13,9 @@
 #ifndef _NOTIFYFS_H_
 #define _NOTIFYFS_H_
 
+/* Notification support */
+#include "notifier.h"
+
 #include <linux/dcache.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -27,9 +30,6 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
-
-/* Notification support */
-#include "notifier.h"
 
 /* the file system name */
 #define NOTIFYFS_NAME "notifyfs"
@@ -85,6 +85,22 @@ struct notifyfs_dentry_info {
 /* notifyfs super-block data in memory */
 struct notifyfs_sb_info {
 	struct super_block *lower_sb;
+
+	/* notifier support */
+	// proc entry for each mount
+	struct proc_dir_entry *proc_entry;
+	// kfifo
+	struct kfifo fifo;
+	// fifo lock
+	spinlock_t fifo_lock;
+	// wait queue for space in fifo
+	wait_queue_head_t writeable;
+	// wait queue for element in fifo
+	wait_queue_head_t readable;
+	// last event
+	unsigned long long event_id;
+	struct FsEventHeader last_event;
+	/* end notifier support */
 };
 
 /*

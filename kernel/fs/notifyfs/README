@@ -1,0 +1,28 @@
+
+NotifyFS
+========
+
+In a nutshell, NotifyFS gathers all file events from a mount point and pushes them in a FIFO under /proc/notifyfs.
+
+Supported events are described by FsOperationType in notifier.h.
+
+Each mount gets its own file under /proc/notifyfs, and all events under that mountpoint are pushed throught the FIFO.
+
+Events are pushed in a blocking way, which means that there must be a receiver for the events, under pain of blocked I/O.
+
+# Changes from wrapfs:
+
+(All changes are delimited by comment blocks)
+
+1) Added several field to notifyfs_sb_info in notifyfs.h, which include:
+
+  - A pointer to the /proc/notifyfs/<mount> file
+  - A pointer to the kfifo
+  - Mutexes for both producing and consuming event from the FIFO
+
+2) Changed notifyfs_read_super in main.c to initialize these extra fields on mount.
+
+3) Changed notifyfs_put_super in super.c to destroy these extra fields on unmount.
+
+4) Several operations in inode.c and file.c have been modified to capture the events.
+

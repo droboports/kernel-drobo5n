@@ -32,6 +32,11 @@ static void notifyfs_put_super(struct super_block *sb)
 	notifyfs_set_lower_super(sb, NULL);
 	atomic_dec(&s->s_active);
 
+	/* notifier support */
+	destroy_proc_file(spd->proc_entry->name);
+	kfifo_free(&spd->fifo);
+	/* end notifier support */
+
 	kfree(spd);
 	sb->s_fs_info = NULL;
 }

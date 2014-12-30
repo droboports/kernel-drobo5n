@@ -33,6 +33,9 @@ static ssize_t notifyfs_write(struct file *file, const char __user *buf,
 			    size_t count, loff_t *ppos)
 {
 	int err = 0;
+	/* notifier support */
+	int err_notify = 0;
+	/* end notifier support */
 	struct file *lower_file;
 	struct dentry *dentry = file->f_path.dentry;
 
@@ -46,12 +49,15 @@ static ssize_t notifyfs_write(struct file *file, const char __user *buf,
 					lower_file->f_path.dentry->d_inode);
 	}
 
-  /* notifier support */
-  if (err >= 0) {
-    UDBG;
-    send_file_event(FileModify, lower_file);
-  }
-  /* end notifier support */
+	/* notifier support */
+	if (err >= 0) {
+//		UDBG;
+		err_notify = send_file_event(dentry->d_sb, FileModify, lower_file);
+		if (err_notify) {
+			err = err_notify;
+		}
+	}
+	/* end notifier support */
 
 	return err;
 }
@@ -302,6 +308,9 @@ static ssize_t notifyfs_aio_write(struct kiocb *iocb, const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos)
 {
 	int err = -EINVAL;
+	/* notifier support */
+	int err_notify = 0;
+	/* end notifier support */
 	struct file *file, *lower_file;
 
 	file = iocb->ki_filp;
@@ -325,12 +334,15 @@ static ssize_t notifyfs_aio_write(struct kiocb *iocb, const struct iovec *iov,
 					lower_file->f_path.dentry->d_inode);
 	}
 
-  /* notifier support */
-  if (err >= 0 || err == -EIOCBQUEUED) {
-    UDBG;
-    send_file_event(FileModify, lower_file);
-  }
-  /* end notifier support */
+	/* notifier support */
+	if (err >= 0 || err == -EIOCBQUEUED) {
+//		UDBG;
+		err_notify = send_file_event(file->f_path.dentry->d_sb, FileModify, lower_file);
+		if (err_notify) {
+			err = err_notify;
+		}
+	}
+	/* end notifier support */
 
 out:
 	return err;

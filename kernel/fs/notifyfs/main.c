@@ -24,10 +24,12 @@ static int notifyfs_read_super(struct super_block *sb, void *raw_data, int silen
 	struct path lower_path;
 	char *dev_name = (char *) raw_data;
 	struct inode *inode;
+	/* notifier support */
+	struct notifyfs_sb_info *spd;
+	/* end notifier support */
 
 	if (!dev_name) {
-		printk(KERN_ERR
-		       "notifyfs: read_super: missing dev_name argument\n");
+		printk(KERN_ERR "NotifyFS: missing dev_name argument\n");
 		err = -EINVAL;
 		goto out;
 	}
@@ -36,15 +38,14 @@ static int notifyfs_read_super(struct super_block *sb, void *raw_data, int silen
 	err = kern_path(dev_name, LOOKUP_FOLLOW | LOOKUP_DIRECTORY,
 			&lower_path);
 	if (err) {
-		printk(KERN_ERR	"notifyfs: error accessing "
-		       "lower directory '%s'\n", dev_name);
+		printk(KERN_ERR	"NotifyFS: error accessing wrapped directory '%s'\n", dev_name);
 		goto out;
 	}
 
 	/* allocate superblock private data */
 	sb->s_fs_info = kzalloc(sizeof(struct notifyfs_sb_info), GFP_KERNEL);
 	if (!NOTIFYFS_SB(sb)) {
-		printk(KERN_CRIT "notifyfs: read_super: out of memory\n");
+		printk(KERN_CRIT "NotifyFS: unable to allocate super block\n");
 		err = -ENOMEM;
 		goto out_free;
 	}
@@ -84,6 +85,23 @@ static int notifyfs_read_super(struct super_block *sb, void *raw_data, int silen
 	if (err)
 		goto out_freeroot;
 
+	/* notifier support */
+	spd = NOTIFYFS_SB(sb);
+	spd->event_id = 0;
+	spd->proc_entry = create_proc_file(lower_path.dentry->d_name.name, spd);
+	if (spd->proc_entry == NULL) {
+		err = -ENOMEM;
+		goto out_free_private_data;
+	}
+	err = kfifo_alloc(&spd->fifo, FIFO_SIZE * MAX_EVENT_SIZE, GFP_KERNEL);
+	if (err != 0) {
+		goto out_free_proc;
+	}
+	spin_lock_init(&spd->fifo_lock);
+	init_waitqueue_head(&spd->writeable);
+	init_waitqueue_head(&spd->readable);
+	/* end notifier support */
+
 	/* if get here: cannot have error */
 
 	/* set the lower dentries for s_root */
@@ -95,13 +113,19 @@ static int notifyfs_read_super(struct super_block *sb, void *raw_data, int silen
 	 * d_rehash it.
 	 */
 	d_rehash(sb->s_root);
+
 	if (!silent)
 		printk(KERN_INFO
 		       "notifyfs: mounted on top of %s type %s\n",
 		       dev_name, lower_sb->s_type->name);
 	goto out; /* all is well */
 
-	/* no longer needed: free_dentry_private_data(sb->s_root); */
+/* notifier support */
+out_free_proc:
+	destroy_proc_file(lower_path.dentry->d_name.name);
+out_free_private_data:
+	free_dentry_private_data(sb->s_root);
+/* end notifier support */
 out_freeroot:
 	dput(sb->s_root);
 out_iput:
@@ -135,34 +159,50 @@ static struct file_system_type notifyfs_fs_type = {
 	.fs_flags = FS_REVAL_DOT,
 };
 
-static int __init init_notifyfs_fs(void)
+static int __init init_notifyfs(void)
 {
 	int err;
 
-	pr_info("Registering notifyfs " NOTIFYFS_VERSION "\n");
+	pr_info("Loading NotifyFS " NOTIFYFS_VERSION "\n");
 
+	/* notifier support */
 	err = notifyfs_init_inode_cache();
-	if (err)
-		goto out;
-	err = notifyfs_init_dentry_cache();
-	if (err)
-		goto out;
-	err = register_filesystem(&notifyfs_fs_type);
-
-out:
 	if (err) {
-		notifyfs_destroy_inode_cache();
-		notifyfs_destroy_dentry_cache();
+		goto out;
 	}
+	err = notifyfs_init_dentry_cache();
+	if (err) {
+		goto out_free_inode_cache;
+	}
+	err = register_filesystem(&notifyfs_fs_type);
+	if (err) {
+		goto out_free_dentry_cache;
+	}
+	err = create_proc_folder();
+	if (err) {
+		goto out_unregister_fs;
+	}
+	pr_info("NotifyFS loaded\n");
+	goto out;
+	/* end notifier support */
+
+out_unregister_fs:
+	unregister_filesystem(&notifyfs_fs_type);
+out_free_dentry_cache:
+	notifyfs_destroy_dentry_cache();
+out_free_inode_cache:
+	notifyfs_destroy_inode_cache();
+out:
 	return err;
 }
 
-static void __exit exit_notifyfs_fs(void)
+static void __exit exit_notifyfs(void)
 {
 	notifyfs_destroy_inode_cache();
 	notifyfs_destroy_dentry_cache();
+	destroy_proc_folder();
 	unregister_filesystem(&notifyfs_fs_type);
-	pr_info("Completed notifyfs module unload\n");
+	pr_info("NotifyFS unloaded\n");
 }
 
 MODULE_AUTHOR("Ricardo Padilha for Drobo Inc"
@@ -171,5 +211,5 @@ MODULE_DESCRIPTION("Notifyfs " NOTIFYFS_VERSION
 		   " (http://www.drobo.com/)");
 MODULE_LICENSE("GPL");
 
-module_init(init_notifyfs_fs);
-module_exit(exit_notifyfs_fs);
+module_init(init_notifyfs);
+module_exit(exit_notifyfs);

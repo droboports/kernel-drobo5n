@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha for Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,8 +12,7 @@
 
 #include "notifyfs.h"
 
-static int notifyfs_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-{
+static int notifyfs_fault(struct vm_area_struct *vma, struct vm_fault *vmf) {
 	int err;
 	struct file *file, *lower_file;
 	const struct vm_operations_struct *lower_vm_ops;
@@ -40,8 +40,7 @@ static int notifyfs_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 }
 
 static int notifyfs_page_mkwrite(struct vm_area_struct *vma,
-			       struct vm_fault *vmf)
-{
+		struct vm_fault *vmf) {
 	int err = 0;
 	struct file *file, *lower_file;
 	const struct vm_operations_struct *lower_vm_ops;
@@ -51,8 +50,9 @@ static int notifyfs_page_mkwrite(struct vm_area_struct *vma,
 	file = lower_vma.vm_file;
 	lower_vm_ops = NOTIFYFS_F(file)->lower_vm_ops;
 	BUG_ON(!lower_vm_ops);
-	if (!lower_vm_ops->page_mkwrite)
+	if (!lower_vm_ops->page_mkwrite) {
 		goto out;
+	}
 
 	lower_file = notifyfs_lower_file(file);
 	/*
@@ -68,14 +68,13 @@ static int notifyfs_page_mkwrite(struct vm_area_struct *vma,
 	 */
 	lower_vma.vm_file = lower_file;
 	err = lower_vm_ops->page_mkwrite(&lower_vma, vmf);
+
 out:
 	return err;
 }
 
 static ssize_t notifyfs_direct_IO(int rw, struct kiocb *iocb,
-				const struct iovec *iov, loff_t offset,
-				unsigned long nr_segs)
-{
+		const struct iovec *iov, loff_t offset, unsigned long nr_segs) {
 	/*
 	 * This function should never be called directly.  We need it
 	 * to exist, to get past a check in open_check_o_direct(),
@@ -85,10 +84,10 @@ static ssize_t notifyfs_direct_IO(int rw, struct kiocb *iocb,
 }
 
 const struct address_space_operations notifyfs_aops = {
-	.direct_IO = notifyfs_direct_IO,
+	.direct_IO = notifyfs_direct_IO
 };
 
 const struct vm_operations_struct notifyfs_vm_ops = {
-	.fault		= notifyfs_fault,
-	.page_mkwrite	= notifyfs_page_mkwrite,
+	.fault = notifyfs_fault,
+	.page_mkwrite = notifyfs_page_mkwrite
 };

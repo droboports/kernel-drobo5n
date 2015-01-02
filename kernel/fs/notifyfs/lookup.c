@@ -3,6 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
+ * Copyright (c) 2014-2015 Ricardo Padilha for Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -14,39 +15,36 @@
 /* The dentry cache is just so we have properly sized dentries */
 static struct kmem_cache *notifyfs_dentry_cachep;
 
-int notifyfs_init_dentry_cache(void)
-{
-	notifyfs_dentry_cachep =
-		kmem_cache_create("notifyfs_dentry",
-				  sizeof(struct notifyfs_dentry_info),
-				  0, SLAB_RECLAIM_ACCOUNT, NULL);
+int notifyfs_init_dentry_cache(void) {
+	notifyfs_dentry_cachep = kmem_cache_create("notifyfs_dentry",
+			sizeof(struct notifyfs_dentry_info), 0, SLAB_RECLAIM_ACCOUNT, NULL);
 
 	return notifyfs_dentry_cachep ? 0 : -ENOMEM;
 }
 
-void notifyfs_destroy_dentry_cache(void)
-{
-	if (notifyfs_dentry_cachep)
+void notifyfs_destroy_dentry_cache(void) {
+	if (notifyfs_dentry_cachep) {
 		kmem_cache_destroy(notifyfs_dentry_cachep);
+	}
 }
 
-void free_dentry_private_data(struct dentry *dentry)
-{
-	if (!dentry || !dentry->d_fsdata)
+void free_dentry_private_data(struct dentry *dentry) {
+	if (!dentry || !dentry->d_fsdata) {
 		return;
+	}
 	kmem_cache_free(notifyfs_dentry_cachep, dentry->d_fsdata);
 	dentry->d_fsdata = NULL;
 }
 
 /* allocate new dentry private data */
-int new_dentry_private_data(struct dentry *dentry)
-{
+int new_dentry_private_data(struct dentry *dentry) {
 	struct notifyfs_dentry_info *info = NOTIFYFS_D(dentry);
 
 	/* use zalloc to init dentry_info.lower_path */
 	info = kmem_cache_zalloc(notifyfs_dentry_cachep, GFP_ATOMIC);
-	if (!info)
+	if (!info) {
 		return -ENOMEM;
+	}
 
 	spin_lock_init(&info->lock);
 	dentry->d_fsdata = info;
@@ -54,45 +52,44 @@ int new_dentry_private_data(struct dentry *dentry)
 	return 0;
 }
 
-static int notifyfs_inode_test(struct inode *inode, void *candidate_lower_inode)
-{
+static int notifyfs_inode_test(struct inode *inode, void *candidate_lower_inode) {
 	struct inode *current_lower_inode = notifyfs_lower_inode(inode);
-	if (current_lower_inode == (struct inode *)candidate_lower_inode)
+	if (current_lower_inode == (struct inode *) candidate_lower_inode) {
 		return 1; /* found a match */
-	else
+	} else {
 		return 0; /* no match */
+	}
 }
 
-static int notifyfs_inode_set(struct inode *inode, void *lower_inode)
-{
+static int notifyfs_inode_set(struct inode *inode, void *lower_inode) {
 	/* we do actual inode initialization in notifyfs_iget */
 	return 0;
 }
 
-struct inode *notifyfs_iget(struct super_block *sb, struct inode *lower_inode)
-{
+struct inode *notifyfs_iget(struct super_block *sb, struct inode *lower_inode) {
 	struct notifyfs_inode_info *info;
 	struct inode *inode; /* the new inode to return */
 	int err;
 
 	inode = iget5_locked(sb, /* our superblock */
-			     /*
-			      * hashval: we use inode number, but we can
-			      * also use "(unsigned long)lower_inode"
-			      * instead.
-			      */
-			     lower_inode->i_ino, /* hashval */
-			     notifyfs_inode_test,	/* inode comparison function */
-			     notifyfs_inode_set, /* inode init function */
-			     lower_inode); /* data passed to test+set fxns */
+	/*
+	 * hashval: we use inode number, but we can
+	 * also use "(unsigned long)lower_inode"
+	 * instead.
+	 */
+	lower_inode->i_ino, /* hashval */
+	notifyfs_inode_test, /* inode comparison function */
+	notifyfs_inode_set, /* inode init function */
+	lower_inode); /* data passed to test+set fxns */
 	if (!inode) {
 		err = -EACCES;
 		iput(lower_inode);
 		return ERR_PTR(err);
 	}
 	/* if found a cached inode, then just return it */
-	if (!(inode->i_state & I_NEW))
+	if (!(inode->i_state & I_NEW)) {
 		return inode;
+	}
 
 	/* initialize new inode */
 	info = NOTIFYFS_I(inode);
@@ -107,18 +104,20 @@ struct inode *notifyfs_iget(struct super_block *sb, struct inode *lower_inode)
 	inode->i_version++;
 
 	/* use different set of inode ops for symlinks & directories */
-	if (S_ISDIR(lower_inode->i_mode))
+	if (S_ISDIR(lower_inode->i_mode)) {
 		inode->i_op = &notifyfs_dir_iops;
-	else if (S_ISLNK(lower_inode->i_mode))
+	} else if (S_ISLNK(lower_inode->i_mode)) {
 		inode->i_op = &notifyfs_symlink_iops;
-	else
+	} else {
 		inode->i_op = &notifyfs_main_iops;
+	}
 
 	/* use different set of file ops for directories */
-	if (S_ISDIR(lower_inode->i_mode))
+	if (S_ISDIR(lower_inode->i_mode)) {
 		inode->i_fop = &notifyfs_dir_fops;
-	else
+	} else {
 		inode->i_fop = &notifyfs_main_fops;
+	}
 
 	inode->i_mapping->a_ops = &notifyfs_aops;
 
@@ -131,9 +130,9 @@ struct inode *notifyfs_iget(struct super_block *sb, struct inode *lower_inode)
 
 	/* properly initialize special inodes */
 	if (S_ISBLK(lower_inode->i_mode) || S_ISCHR(lower_inode->i_mode) ||
-	    S_ISFIFO(lower_inode->i_mode) || S_ISSOCK(lower_inode->i_mode))
-		init_special_inode(inode, lower_inode->i_mode,
-				   lower_inode->i_rdev);
+	S_ISFIFO(lower_inode->i_mode) || S_ISSOCK(lower_inode->i_mode)) {
+		init_special_inode(inode, lower_inode->i_mode, lower_inode->i_rdev);
+	}
 
 	/* all well, copy inode attributes */
 	fsstack_copy_attr_all(inode, lower_inode);
@@ -152,8 +151,7 @@ struct inode *notifyfs_iget(struct super_block *sb, struct inode *lower_inode)
  * @lower_path: the lower path (caller does path_get/put)
  */
 int notifyfs_interpose(struct dentry *dentry, struct super_block *sb,
-		     struct path *lower_path)
-{
+		struct path *lower_path) {
 	int err = 0;
 	struct inode *inode;
 	struct inode *lower_inode;
@@ -193,8 +191,7 @@ out:
  * Fills in lower_parent_path with <dentry,mnt> on success.
  */
 static struct dentry *__notifyfs_lookup(struct dentry *dentry, int flags,
-				      struct path *lower_parent_path)
-{
+		struct path *lower_parent_path) {
 	int err = 0;
 	struct vfsmount *lower_dir_mnt;
 	struct dentry *lower_dir_dentry = NULL;
@@ -206,8 +203,9 @@ static struct dentry *__notifyfs_lookup(struct dentry *dentry, int flags,
 	/* must initialize dentry operations */
 	d_set_d_op(dentry, &notifyfs_dops);
 
-	if (IS_ROOT(dentry))
+	if (IS_ROOT(dentry)) {
 		goto out;
+	}
 
 	name = dentry->d_name.name;
 
@@ -217,14 +215,15 @@ static struct dentry *__notifyfs_lookup(struct dentry *dentry, int flags,
 
 	/* Use vfs_path_lookup to check if the dentry exists or not */
 	err = vfs_path_lookup(lower_dir_dentry, lower_dir_mnt, name, 0,
-			      &lower_path);
+			&lower_path);
 
 	/* no error: handle positive dentries */
 	if (!err) {
 		notifyfs_set_lower_path(dentry, &lower_path);
 		err = notifyfs_interpose(dentry, dentry->d_sb, &lower_path);
-		if (err) /* path_put underlying path on error */
+		if (err) { /* path_put underlying path on error */
 			notifyfs_put_reset_lower_path(dentry);
+		}
 		goto out;
 	}
 
@@ -232,16 +231,18 @@ static struct dentry *__notifyfs_lookup(struct dentry *dentry, int flags,
 	 * We don't consider ENOENT an error, and we want to return a
 	 * negative dentry.
 	 */
-	if (err && err != -ENOENT)
+	if (err && err != -ENOENT) {
 		goto out;
+	}
 
 	/* instatiate a new negative dentry */
 	this.name = name;
 	this.len = strlen(name);
 	this.hash = full_name_hash(this.name, this.len);
 	lower_dentry = d_lookup(lower_dir_dentry, &this);
-	if (lower_dentry)
+	if (lower_dentry) {
 		goto setup_lower;
+	}
 
 	lower_dentry = d_alloc(lower_dir_dentry, &this);
 	if (!lower_dentry) {
@@ -250,8 +251,7 @@ static struct dentry *__notifyfs_lookup(struct dentry *dentry, int flags,
 	}
 	d_add(lower_dentry, NULL); /* instantiate and hash */
 
-setup_lower:
-	lower_path.dentry = lower_dentry;
+	setup_lower: lower_path.dentry = lower_dentry;
 	lower_path.mnt = mntget(lower_dir_mnt);
 	notifyfs_set_lower_path(dentry, &lower_path);
 
@@ -260,16 +260,16 @@ setup_lower:
 	 * the VFS will continue the process of making this negative dentry
 	 * into a positive one.
 	 */
-	if (flags & (LOOKUP_CREATE|LOOKUP_RENAME_TARGET))
+	if (flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET)) {
 		err = 0;
+	}
 
 out:
 	return ERR_PTR(err);
 }
 
 struct dentry *notifyfs_lookup(struct inode *dir, struct dentry *dentry,
-			     struct nameidata *nd)
-{
+		struct nameidata *nd) {
 	struct dentry *ret, *parent;
 	struct path lower_parent_path;
 	int err = 0;
@@ -286,16 +286,19 @@ struct dentry *notifyfs_lookup(struct inode *dir, struct dentry *dentry,
 		goto out;
 	}
 	ret = __notifyfs_lookup(dentry, nd->flags, &lower_parent_path);
-	if (IS_ERR(ret))
+	if (IS_ERR(ret)) {
 		goto out;
-	if (ret)
+	}
+	if (ret) {
 		dentry = ret;
-	if (dentry->d_inode)
+	}
+	if (dentry->d_inode) {
 		fsstack_copy_attr_times(dentry->d_inode,
-					notifyfs_lower_inode(dentry->d_inode));
+				notifyfs_lower_inode(dentry->d_inode));
+	}
 	/* update parent directory's atime */
 	fsstack_copy_attr_atime(parent->d_inode,
-				notifyfs_lower_inode(parent->d_inode));
+			notifyfs_lower_inode(parent->d_inode));
 
 out:
 	notifyfs_put_lower_path(parent, &lower_parent_path);

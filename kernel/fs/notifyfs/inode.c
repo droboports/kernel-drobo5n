@@ -3,7 +3,7 @@
  * Copyright (c) 2009	   Shrikar Archak
  * Copyright (c) 2003-2014 Stony Brook University
  * Copyright (c) 2003-2014 The Research Foundation of SUNY
- * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
+ * Copyright (c) 2014-2015 Ricardo Padilha for Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -12,9 +12,8 @@
 
 #include "notifyfs.h"
 
-static int notifyfs_create(struct inode *dir, struct dentry *dentry,
-			 int mode, struct nameidata *nd)
-{
+static int notifyfs_create(struct inode *dir, struct dentry *dentry, int mode,
+		struct nameidata *nd) {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
@@ -25,25 +24,28 @@ static int notifyfs_create(struct inode *dir, struct dentry *dentry,
 	lower_parent_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 
 	pathcpy(&saved_path, &nd->path);
 	pathcpy(&nd->path, &lower_path);
 	err = vfs_create(lower_parent_dentry->d_inode, lower_dentry, mode, nd);
 	pathcpy(&nd->path, &saved_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	err = notifyfs_interpose(dentry, dir->i_sb, &lower_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, FileCreate, lower_dentry);
+	UDBG;
+	err = send_dentry_event(dentry->d_sb, FS_FILE_CREATE, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -55,8 +57,7 @@ out_unlock:
 }
 
 static int notifyfs_link(struct dentry *old_dentry, struct inode *dir,
-		       struct dentry *new_dentry)
-{
+		struct dentry *new_dentry) {
 	struct dentry *lower_old_dentry;
 	struct dentry *lower_new_dentry;
 	struct dentry *lower_dir_dentry;
@@ -72,26 +73,29 @@ static int notifyfs_link(struct dentry *old_dentry, struct inode *dir,
 	lower_dir_dentry = lock_parent(lower_new_dentry);
 
 	err = mnt_want_write(lower_new_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 
 	err = vfs_link(lower_old_dentry, lower_dir_dentry->d_inode,
-		       lower_new_dentry);
-	if (err || !lower_new_dentry->d_inode)
+			lower_new_dentry);
+	if (err || !lower_new_dentry->d_inode) {
 		goto out;
+	}
 
 	err = notifyfs_interpose(new_dentry, dir->i_sb, &lower_new_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	fsstack_copy_attr_times(dir, lower_new_dentry->d_inode);
 	fsstack_copy_inode_size(dir, lower_new_dentry->d_inode);
 	set_nlink(old_dentry->d_inode,
-		  notifyfs_lower_inode(old_dentry->d_inode)->i_nlink);
+			notifyfs_lower_inode(old_dentry->d_inode)->i_nlink);
 	i_size_write(new_dentry->d_inode, file_size_save);
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(old_dentry->d_sb, FileCreate, lower_new_dentry);
+	UDBG;
+	err = send_dentry_event(old_dentry->d_sb, FS_FILE_CREATE, lower_new_dentry);
 	/* end notifier support */
 
 out:
@@ -103,8 +107,7 @@ out_unlock:
 	return err;
 }
 
-static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
-{
+static int notifyfs_unlink(struct inode *dir, struct dentry *dentry) {
 	int err;
 	struct dentry *lower_dentry;
 	struct inode *lower_dir_inode = notifyfs_lower_inode(dir);
@@ -117,8 +120,9 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
 	lower_dir_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 	err = vfs_unlink(lower_dir_inode, lower_dentry);
 
 	/*
@@ -128,20 +132,21 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry)
 	 * we just need to detect them here and treat such EBUSY errors as
 	 * if the upper file was successfully deleted.
 	 */
-	if (err == -EBUSY && (lower_dentry->d_flags & DCACHE_NFSFS_RENAMED))
+	if (err == -EBUSY && (lower_dentry->d_flags & DCACHE_NFSFS_RENAMED)) {
 		err = 0;
-	if (err)
+	}
+	if (err) {
 		goto out;
+	}
 	fsstack_copy_attr_times(dir, lower_dir_inode);
 	fsstack_copy_inode_size(dir, lower_dir_inode);
-	set_nlink(dentry->d_inode,
-		  notifyfs_lower_inode(dentry->d_inode)->i_nlink);
+	set_nlink(dentry->d_inode, notifyfs_lower_inode(dentry->d_inode)->i_nlink);
 	dentry->d_inode->i_ctime = dir->i_ctime;
 	d_drop(dentry); /* this is needed, else LTP fails (VFS won't do it) */
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, FileDelete, lower_dentry);
+	UDBG;
+	err = send_dentry_event(dentry->d_sb, FS_FILE_DELETE, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -154,8 +159,7 @@ out_unlock:
 }
 
 static int notifyfs_symlink(struct inode *dir, struct dentry *dentry,
-			  const char *symname)
-{
+		const char *symname) {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
@@ -166,20 +170,23 @@ static int notifyfs_symlink(struct inode *dir, struct dentry *dentry,
 	lower_parent_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 	err = vfs_symlink(lower_parent_dentry->d_inode, lower_dentry, symname);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	err = notifyfs_interpose(dentry, dir->i_sb, &lower_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, FileCreate, lower_dentry);
+	UDBG;
+	err = send_dentry_event(dentry->d_sb, FS_FILE_CREATE, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -190,8 +197,7 @@ out_unlock:
 	return err;
 }
 
-static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
-{
+static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode) {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
@@ -202,15 +208,18 @@ static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	lower_parent_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 	err = vfs_mkdir(lower_parent_dentry->d_inode, lower_dentry, mode);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	err = notifyfs_interpose(dentry, dir->i_sb, &lower_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
@@ -218,8 +227,8 @@ static int notifyfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
 	set_nlink(dir, notifyfs_lower_inode(dir)->i_nlink);
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, DirectoryCreate, lower_dentry);
+	UDBG;
+	err = send_dentry_event(dentry->d_sb, FS_DIR_CREATE, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -230,8 +239,7 @@ out_unlock:
 	return err;
 }
 
-static int notifyfs_rmdir(struct inode *dir, struct dentry *dentry)
-{
+static int notifyfs_rmdir(struct inode *dir, struct dentry *dentry) {
 	struct dentry *lower_dentry;
 	struct dentry *lower_dir_dentry;
 	int err;
@@ -242,22 +250,25 @@ static int notifyfs_rmdir(struct inode *dir, struct dentry *dentry)
 	lower_dir_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 	err = vfs_rmdir(lower_dir_dentry->d_inode, lower_dentry);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
-	d_drop(dentry);	/* drop our dentry on success (why not VFS's job?) */
-	if (dentry->d_inode)
+	d_drop(dentry); /* drop our dentry on success (why not VFS's job?) */
+	if (dentry->d_inode) {
 		clear_nlink(dentry->d_inode);
+	}
 	fsstack_copy_attr_times(dir, lower_dir_dentry->d_inode);
 	fsstack_copy_inode_size(dir, lower_dir_dentry->d_inode);
 	set_nlink(dir, lower_dir_dentry->d_inode->i_nlink);
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, DirectoryDelete, lower_dentry);
+	UDBG;
+	err = send_dentry_event(dentry->d_sb, FS_DIR_DELETE, lower_dentry);
 	/* end notifier support */
 
 out:
@@ -269,8 +280,7 @@ out_unlock:
 }
 
 static int notifyfs_mknod(struct inode *dir, struct dentry *dentry, int mode,
-			dev_t dev)
-{
+		dev_t dev) {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
@@ -281,15 +291,18 @@ static int notifyfs_mknod(struct inode *dir, struct dentry *dentry, int mode,
 	lower_parent_dentry = lock_parent(lower_dentry);
 
 	err = mnt_want_write(lower_path.mnt);
-	if (err)
+	if (err) {
 		goto out_unlock;
+	}
 	err = vfs_mknod(lower_parent_dentry->d_inode, lower_dentry, mode, dev);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	err = notifyfs_interpose(dentry, dir->i_sb, &lower_path);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	fsstack_copy_attr_times(dir, notifyfs_lower_inode(dir));
 	fsstack_copy_inode_size(dir, lower_parent_dentry->d_inode);
 
@@ -306,8 +319,7 @@ out_unlock:
  * superblock-level name-space lock for renames and copy-ups.
  */
 static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
-			 struct inode *new_dir, struct dentry *new_dentry)
-{
+		struct inode *new_dir, struct dentry *new_dentry) {
 	int err = 0;
 	struct dentry *lower_old_dentry = NULL;
 	struct dentry *lower_new_dentry = NULL;
@@ -342,68 +354,59 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	}
 
 	err = mnt_want_write(lower_old_path.mnt);
-	if (err)
+	if (err) {
 		goto out;
+	}
 	err = mnt_want_write(lower_new_path.mnt);
-	if (err)
+	if (err) {
 		goto out_drop_old_write;
+	}
 
 	/* notifier support */
 	// We have to save the names before forwarding the rename call because
 	// the names get overwritten.
 	oldNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
-	if (oldNameBuffer == NULL) {
-		err = -ENOMEM;
-		goto out_err;
-	}
+	CHECK_PTR(oldNameBuffer, out_err);
 	oldName = dentry_path_raw(lower_old_dentry, oldNameBuffer, MAX_PATH_LENGTH);
 	// Can only be -ENAMETOOLONG
-	if (IS_ERR(oldName)) {
-		err = PTR_ERR(oldName);
-		goto out_free_old_name;
-	}
+	CHECK_PTR(oldName, out_free_old_name);
 	newNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
-	if (newNameBuffer == NULL) {
-		err = -ENOMEM;
-		goto out_free_old_name;
-	}
+	CHECK_PTR(newNameBuffer, out_free_old_name);
 	newName = dentry_path_raw(lower_new_dentry, newNameBuffer, MAX_PATH_LENGTH);
 	// Can only be -ENAMETOOLONG
-	if (IS_ERR(newName)) {
-		err = PTR_ERR(newName);
-		goto out_free_new_name;
-	}
+	CHECK_PTR(oldName, out_free_new_name);
 	/* end notifier support */
 
 	err = vfs_rename(lower_old_dir_dentry->d_inode, lower_old_dentry,
-			 lower_new_dir_dentry->d_inode, lower_new_dentry);
-	if (err)
+			lower_new_dir_dentry->d_inode, lower_new_dentry);
+	if (err) {
 		goto out_free_new_name;
+	}
 
 	fsstack_copy_attr_all(new_dir, lower_new_dir_dentry->d_inode);
 	fsstack_copy_inode_size(new_dir, lower_new_dir_dentry->d_inode);
 	if (new_dir != old_dir) {
-		fsstack_copy_attr_all(old_dir,
-				      lower_old_dir_dentry->d_inode);
-		fsstack_copy_inode_size(old_dir,
-					lower_old_dir_dentry->d_inode);
+		fsstack_copy_attr_all(old_dir, lower_old_dir_dentry->d_inode);
+		fsstack_copy_inode_size(old_dir, lower_old_dir_dentry->d_inode);
 	}
 
 	/* notifier support */
-//	UDBG;
+	UDBG;
 	if (S_ISDIR(lower_old_dentry->d_inode->i_mode)) {
-		err = send_dentry_rename(old_dentry->d_sb, DirectoryMove, lower_old_dentry->d_inode, oldName, newName);
-	} else {
-		err = send_dentry_rename(old_dentry->d_sb, FileMove, lower_old_dentry->d_inode, oldName, newName);
+		err = send_dentry_rename(old_dentry->d_sb, FS_DIR_MOVE,
+				lower_old_dentry->d_inode, oldName, newName);
+	} else if (S_ISREG(lower_old_dentry->d_inode->i_mode)) {
+		err = send_dentry_rename(old_dentry->d_sb, FS_FILE_MOVE,
+				lower_old_dentry->d_inode, oldName, newName);
 	}
 	/* end notifier support */
 
-/* notifier support */
+	/* notifier support */
 out_free_new_name:
 	kfree(newNameBuffer);
 out_free_old_name:
 	kfree(oldNameBuffer);
-/* end notifier support */
+	/* end notifier support */
 out_err:
 	mnt_drop_write(lower_new_path.mnt);
 out_drop_old_write:
@@ -417,24 +420,24 @@ out:
 	return err;
 }
 
-static int notifyfs_readlink(struct dentry *dentry, char __user *buf, int bufsiz)
-{
+static int notifyfs_readlink(struct dentry *dentry, char __user *buf,
+		int bufsiz) {
 	int err;
 	struct dentry *lower_dentry;
 	struct path lower_path;
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
-	if (!lower_dentry->d_inode->i_op ||
-	    !lower_dentry->d_inode->i_op->readlink) {
+	if (!lower_dentry->d_inode->i_op
+			|| !lower_dentry->d_inode->i_op->readlink) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = lower_dentry->d_inode->i_op->readlink(lower_dentry,
-						    buf, bufsiz);
-	if (err < 0)
+	err = lower_dentry->d_inode->i_op->readlink(lower_dentry, buf, bufsiz);
+	if (err < 0) {
 		goto out;
+	}
 	fsstack_copy_attr_atime(dentry->d_inode, lower_dentry->d_inode);
 
 out:
@@ -442,8 +445,7 @@ out:
 	return err;
 }
 
-static void *notifyfs_follow_link(struct dentry *dentry, struct nameidata *nd)
-{
+static void *notifyfs_follow_link(struct dentry *dentry, struct nameidata *nd) {
 	char *buf;
 	int len = PAGE_SIZE, err;
 	mm_segment_t old_fs;
@@ -473,11 +475,11 @@ out:
 
 /* this @nd *IS* still used */
 static void notifyfs_put_link(struct dentry *dentry, struct nameidata *nd,
-			    void *cookie)
-{
+		void *cookie) {
 	char *buf = nd_get_link(nd);
-	if (!IS_ERR(buf))	/* free the char* */
+	if (!IS_ERR(buf)) {
 		kfree(buf);
+	}
 }
 
 /**
@@ -491,8 +493,7 @@ static void notifyfs_put_link(struct dentry *dentry, struct nameidata *nd,
  *
  * When checking for MAY_APPEND, MAY_WRITE must also be set in @mask.
  */
-static int notifyfs_permission(struct inode *inode, int mask)
-{
+static int notifyfs_permission(struct inode *inode, int mask) {
 	struct inode *lower_inode;
 	int err;
 
@@ -501,8 +502,7 @@ static int notifyfs_permission(struct inode *inode, int mask)
 	return err;
 }
 
-static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
-{
+static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia) {
 	int err = 0;
 	struct dentry *lower_dentry;
 	struct inode *inode;
@@ -518,8 +518,9 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 * calling notify_change on the lower inode.
 	 */
 	err = inode_change_ok(inode, ia);
-	if (err)
+	if (err) {
 		goto out_err;
+	}
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
@@ -527,8 +528,9 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 
 	/* prepare our own lower struct iattr (with the lower file) */
 	memcpy(&lower_ia, ia, sizeof(lower_ia));
-	if (ia->ia_valid & ATTR_FILE)
+	if (ia->ia_valid & ATTR_FILE) {
 		lower_ia.ia_file = notifyfs_lower_file(ia->ia_file);
+	}
 
 	/*
 	 * If shrinking, first truncate upper level to cancel writing dirty
@@ -540,8 +542,9 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 */
 	if (ia->ia_valid & ATTR_SIZE) {
 		err = inode_newsize_ok(inode, ia->ia_size);
-		if (err)
+		if (err) {
 			goto out;
+		}
 		truncate_setsize(inode, ia->ia_size);
 	}
 
@@ -549,8 +552,9 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 * mode change is for clearing setuid/setgid bits. Allow lower fs
 	 * to interpret this in its own way.
 	 */
-	if (lower_ia.ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID))
+	if (lower_ia.ia_valid & (ATTR_KILL_SUID | ATTR_KILL_SGID)) {
 		lower_ia.ia_valid &= ~ATTR_MODE;
+	}
 
 	/* notify the (possibly copied-up) lower inode */
 	/*
@@ -561,8 +565,9 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	mutex_lock(&lower_dentry->d_inode->i_mutex);
 	err = notify_change(lower_dentry, &lower_ia); /* note: lower_ia */
 	mutex_unlock(&lower_dentry->d_inode->i_mutex);
-	if (err)
+	if (err) {
 		goto out;
+	}
 
 	/* get attributes from the lower inode */
 	fsstack_copy_attr_all(inode, lower_inode);
@@ -573,8 +578,12 @@ static int notifyfs_setattr(struct dentry *dentry, struct iattr *ia)
 	 */
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
+	UDBG;
+	if (S_ISDIR(lower_dentry->d_inode->i_mode)) {
+		err = send_dentry_event(dentry->d_sb, FS_DIR_ATTRIB, lower_dentry);
+	} else {
+		err = send_dentry_event(dentry->d_sb, FS_FILE_ATTRIB, lower_dentry);
+	}
 	/* end notifier support */
 
 out:
@@ -583,29 +592,32 @@ out_err:
 	return err;
 }
 
-static int
-notifyfs_setxattr(struct dentry *dentry, const char *name, const void *value,
-		size_t size, int flags)
-{
-	int err; struct dentry *lower_dentry;
+static int notifyfs_setxattr(struct dentry *dentry, const char *name,
+		const void *value, size_t size, int flags) {
+	int err;
+	struct dentry *lower_dentry;
 	struct path lower_path;
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
-	if (!lower_dentry->d_inode->i_op ||
-	    !lower_dentry->d_inode->i_op->setxattr) {
+	if (!lower_dentry->d_inode->i_op
+			|| !lower_dentry->d_inode->i_op->setxattr) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = lower_dentry->d_inode->i_op->setxattr(lower_dentry,
-						    name, value, size, flags);
+	err = lower_dentry->d_inode->i_op->setxattr(lower_dentry, name, value, size,
+			flags);
 	if (err)
 		goto out;
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
+	UDBG;
+	if (S_ISDIR(lower_dentry->d_inode->i_mode)) {
+		err = send_dentry_event(dentry->d_sb, FS_DIR_XATTRIB, lower_dentry);
+	} else {
+		err = send_dentry_event(dentry->d_sb, FS_FILE_XATTRIB, lower_dentry);
+	}
 	/* end notifier support */
 
 out:
@@ -613,74 +625,74 @@ out:
 	return err;
 }
 
-static ssize_t
-notifyfs_getxattr(struct dentry *dentry, const char *name, void *buffer,
-		size_t size)
-{
+static ssize_t notifyfs_getxattr(struct dentry *dentry, const char *name,
+		void *buffer, size_t size) {
 	int err;
 	struct dentry *lower_dentry;
 	struct path lower_path;
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
-	if (!lower_dentry->d_inode->i_op ||
-	    !lower_dentry->d_inode->i_op->getxattr) {
+	if (!lower_dentry->d_inode->i_op
+			|| !lower_dentry->d_inode->i_op->getxattr) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = lower_dentry->d_inode->i_op->getxattr(lower_dentry,
-						    name, buffer, size);
+	err = lower_dentry->d_inode->i_op->getxattr(lower_dentry, name, buffer,
+			size);
+
 out:
 	notifyfs_put_lower_path(dentry, &lower_path);
 	return err;
 }
 
-static ssize_t
-notifyfs_listxattr(struct dentry *dentry, char *buffer, size_t buffer_size)
-{
+static ssize_t notifyfs_listxattr(struct dentry *dentry, char *buffer,
+		size_t buffer_size) {
 	int err;
 	struct dentry *lower_dentry;
 	struct path lower_path;
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
-	if (!lower_dentry->d_inode->i_op ||
-	    !lower_dentry->d_inode->i_op->listxattr) {
+	if (!lower_dentry->d_inode->i_op
+			|| !lower_dentry->d_inode->i_op->listxattr) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = lower_dentry->d_inode->i_op->listxattr(lower_dentry,
-						     buffer, buffer_size);
+	err = lower_dentry->d_inode->i_op->listxattr(lower_dentry, buffer,
+			buffer_size);
+
 out:
 	notifyfs_put_lower_path(dentry, &lower_path);
 	return err;
 }
 
-static int
-notifyfs_removexattr(struct dentry *dentry, const char *name)
-{
+static int notifyfs_removexattr(struct dentry *dentry, const char *name) {
 	int err;
 	struct dentry *lower_dentry;
 	struct path lower_path;
 
 	notifyfs_get_lower_path(dentry, &lower_path);
 	lower_dentry = lower_path.dentry;
-	if (!lower_dentry->d_inode->i_op ||
-	    !lower_dentry->d_inode->i_op->removexattr) {
+	if (!lower_dentry->d_inode->i_op
+			|| !lower_dentry->d_inode->i_op->removexattr) {
 		err = -EINVAL;
 		goto out;
 	}
 
-	err = lower_dentry->d_inode->i_op->removexattr(lower_dentry,
-						       name);
+	err = lower_dentry->d_inode->i_op->removexattr(lower_dentry, name);
 	if (err)
 		goto out;
 
 	/* notifier support */
-//	UDBG;
-	err = send_dentry_event(dentry->d_sb, SetAttribute, lower_dentry);
+	UDBG;
+	if (S_ISDIR(lower_dentry->d_inode->i_mode)) {
+		err = send_dentry_event(dentry->d_sb, FS_DIR_XATTRIB, lower_dentry);
+	} else {
+		err = send_dentry_event(dentry->d_sb, FS_FILE_XATTRIB, lower_dentry);
+	}
 	/* end notifier support */
 
 out:
@@ -689,40 +701,40 @@ out:
 }
 
 const struct inode_operations notifyfs_symlink_iops = {
-	.readlink	= notifyfs_readlink,
-	.permission	= notifyfs_permission,
-	.follow_link	= notifyfs_follow_link,
-	.setattr	= notifyfs_setattr,
-	.put_link	= notifyfs_put_link,
-	.setxattr	= notifyfs_setxattr,
-	.getxattr	= notifyfs_getxattr,
-	.listxattr	= notifyfs_listxattr,
-	.removexattr	= notifyfs_removexattr,
+	.readlink = notifyfs_readlink,
+	.permission = notifyfs_permission,
+	.follow_link = notifyfs_follow_link,
+	.setattr = notifyfs_setattr,
+	.put_link = notifyfs_put_link,
+	.setxattr = notifyfs_setxattr,
+	.getxattr = notifyfs_getxattr,
+	.listxattr = notifyfs_listxattr,
+	.removexattr = notifyfs_removexattr
 };
 
 const struct inode_operations notifyfs_dir_iops = {
-	.create		= notifyfs_create,
-	.lookup		= notifyfs_lookup,
-	.link		= notifyfs_link,
-	.unlink		= notifyfs_unlink,
-	.symlink	= notifyfs_symlink,
-	.mkdir		= notifyfs_mkdir,
-	.rmdir		= notifyfs_rmdir,
-	.mknod		= notifyfs_mknod,
-	.rename		= notifyfs_rename,
-	.permission	= notifyfs_permission,
-	.setattr	= notifyfs_setattr,
-	.setxattr	= notifyfs_setxattr,
-	.getxattr	= notifyfs_getxattr,
-	.listxattr	= notifyfs_listxattr,
-	.removexattr	= notifyfs_removexattr,
+	.create = notifyfs_create,
+	.lookup = notifyfs_lookup,
+	.link = notifyfs_link,
+	.unlink = notifyfs_unlink,
+	.symlink = notifyfs_symlink,
+	.mkdir = notifyfs_mkdir,
+	.rmdir = notifyfs_rmdir,
+	.mknod = notifyfs_mknod,
+	.rename = notifyfs_rename,
+	.permission = notifyfs_permission,
+	.setattr = notifyfs_setattr,
+	.setxattr = notifyfs_setxattr,
+	.getxattr = notifyfs_getxattr,
+	.listxattr = notifyfs_listxattr,
+	.removexattr = notifyfs_removexattr
 };
 
 const struct inode_operations notifyfs_main_iops = {
-	.permission	= notifyfs_permission,
-	.setattr	= notifyfs_setattr,
-	.setxattr	= notifyfs_setxattr,
-	.getxattr	= notifyfs_getxattr,
-	.listxattr	= notifyfs_listxattr,
-	.removexattr	= notifyfs_removexattr,
+	.permission = notifyfs_permission,
+	.setattr = notifyfs_setattr,
+	.setxattr = notifyfs_setxattr,
+	.getxattr = notifyfs_getxattr,
+	.listxattr = notifyfs_listxattr,
+	.removexattr = notifyfs_removexattr
 };

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015 Ricardo Padilha, Drobo Inc
+ * Copyright (c) 2014-2015 Ricardo Padilha for Drobo Inc
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -13,58 +13,52 @@
 #include <linux/poll.h>
 /* message queues between kernel and user space */
 #include <linux/kfifo.h>
+/* array list for pid blacklist */
+#include "array_list.h"
+/* event definitions */
+#include "events.h"
 
-/* fifo size in elements (events), this must be a power of 2 */
-static const unsigned int FIFO_SIZE = 128;
+#define PROC_SRC_DIR_FILE "source"
+#define PROC_EVENTS_FILE "events"
+#define PROC_EVENT_MASK_FILE "event_mask"
+#define PROC_FIFO_BLOCK_FILE "fifo_block"
+#define PROC_FIFO_SIZE_FILE "fifo_size"
+#define PROC_PID_BLACKLIST_FILE "pid_blacklist"
 
-// support paths up to 1 KiB characters
-#define MAX_PATH_LENGTH 1024
+int send_file_event(struct super_block *sb, const fs_operation_type op, const struct file *file);
 
-/*
- * FsEvent is a buffer containing:
- * - offset 0:                                 struct header
- * - offset sizeof(header):                    char[] oldPath
- * - offset sizeof(header)+header->oldPathLen: char[] newPath
- *
- * Total length of FsEvent: sizeof(header) + strlen(path1) + strlen(path2)
- */
+int send_dentry_event(struct super_block *sb, const fs_operation_type op, struct dentry *dentry);
 
-/* Duplicate of FsOpTypes.h */
-typedef enum FsOperationType {
-	FileCreate = 0,
-	FileModify = 1,
-	FileDelete = 2,
-	FileMove = 3,
-	DirectoryCreate = 4,
-	DirectoryDelete = 5,
-	DirectoryMove = 6,
-	SetAttribute = 7,
-	Unknown = 99
-} FsOperationType;
+int send_dentry_rename(struct super_block *sb, const fs_operation_type op, struct inode *inode, const char *old_name, const char *new_name);
 
-typedef struct FsEventHeader {
-	pid_t pid;
-	unsigned char operation;
-	ino_t inode;
-	time_t timestamp;
-	unsigned long long id;
-	size_t oldPathLen;
-	size_t newPathLen;
-} FsEventHeader;
+int create_proc_dir(void);
 
-/* maximum size of an FsEvent */
-#define MAX_EVENT_SIZE sizeof(FsEventHeader) + 2 * MAX_PATH_LENGTH
+void destroy_proc_dir(void);
 
-int send_file_event(struct super_block *sb, const FsOperationType op, const struct file *file);
+struct proc_dir_entry *create_proc_mount_dir(ino_t inode);
 
-int send_dentry_event(struct super_block *sb, const FsOperationType op, struct dentry *dentry);
+void destroy_proc_mount_dir(struct proc_dir_entry *dir);
 
-int send_dentry_rename(struct super_block *sb, const FsOperationType op, struct inode *inode, const char *oldName, const char *newName);
+struct proc_dir_entry *create_src_dir_file(void *data, struct proc_dir_entry *dir);
 
-int create_proc_folder(void);
+struct proc_dir_entry *create_events_file(void *data, struct proc_dir_entry *dir);
 
-void destroy_proc_folder(void);
+struct proc_dir_entry *create_mask_file(void *data, struct proc_dir_entry *dir);
 
-struct proc_dir_entry *create_proc_file(const char *name, void *data);
+struct proc_dir_entry *create_fifo_block_file(void *data, struct proc_dir_entry *dir);
 
-void destroy_proc_file(const char *name);
+struct proc_dir_entry *create_fifo_size_file(void *data, struct proc_dir_entry *dir);
+
+struct proc_dir_entry *create_pid_blacklist_file(void *data, struct proc_dir_entry *dir);
+
+#define CHECK_NULL(ptr, label) \
+	if (IS_ERR_OR_NULL(ptr)) {\
+		err = !(ptr) ? -EINVAL : PTR_ERR(ptr);\
+		goto label;\
+	}
+
+#define CHECK_PTR(ptr, label) \
+	if (IS_ERR_OR_NULL(ptr)) {\
+		err = !(ptr) ? -ENOMEM : PTR_ERR(ptr);\
+		goto label;\
+	}

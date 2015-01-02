@@ -4,6 +4,8 @@ config NOTIFY_FS
 	help
 	  Notifyfs is a stackable file system which simply passes its
 	  operations to the lower layer.  It also forwards the filesystem
-	  events through a netlink socket to user space.
+	  events through a proc file to user space. The size of the event
+	  queue can be defined, and whether or not event sending/receiving
+	  is blocking.
 	  It is based on wrapfs (see Documentation/filesystems/wrapfs.txt).
 	  See <http://wrapfs.filesystems.org/> for details.

@@ -35,13 +35,15 @@ static void notifyfs_put_super(struct super_block *sb) {
 
 	/* notifier support */
 	// unblock any readers of the events file
-	atomic_set(&spd->unmounting, 1);
-	if (atomic_read(&spd->fifo_block) == BLOCKING_FIFO) {
-		wake_up_interruptible(&spd->readable);
-	}
+//	atomic_set(&spd->unmounting, 1);
+//	if (atomic_read(&spd->fifo_block) == BLOCKING_FIFO) {
+//		wake_up_interruptible(&spd->readable);
+//	}
 	remove_proc_entry(PROC_PID_BLACKLIST_FILE, spd->proc_dir);
 	remove_proc_entry(PROC_FIFO_SIZE_FILE, spd->proc_dir);
 	remove_proc_entry(PROC_FIFO_BLOCK_FILE, spd->proc_dir);
+	remove_proc_entry(PROC_LOCK_MASK_FILE, spd->proc_dir);
+	remove_proc_entry(PROC_GLOBAL_LOCK_FILE, spd->proc_dir);
 	remove_proc_entry(PROC_EVENT_MASK_FILE, spd->proc_dir);
 	remove_proc_entry(PROC_EVENTS_FILE, spd->proc_dir);
 	remove_proc_entry(PROC_SRC_DIR_FILE, spd->proc_dir);
@@ -177,6 +179,10 @@ static int notifyfs_show_options(struct seq_file *seq, struct vfsmount *mnt) {
 	if (err < 0) {
 		goto out;
 	}
+	err = seq_printf(seq, ",lock_mask=%u", atomic_read(&spd->lock_mask));
+	if (err < 0) {
+		goto out;
+	}
 	err = seq_printf(seq, ",fifo_size=%u", kfifo_size(&spd->fifo));
 	if (err < 0) {
 		goto out;
@@ -217,7 +223,6 @@ const struct super_operations notifyfs_sops = {
 	.remount_fs = notifyfs_remount_fs,
 	.evict_inode = notifyfs_evict_inode,
 	.umount_begin = notifyfs_umount_begin,
-	.show_options = generic_show_options,
 	.alloc_inode = notifyfs_alloc_inode,
 	.destroy_inode = notifyfs_destroy_inode,
 	.drop_inode = generic_delete_inode,

@@ -16,6 +16,7 @@
 
 enum {
 	opt_event_mask,
+	opt_lock_mask,
 	opt_fifo_size,
 	opt_blocking_fifo,
 	opt_non_blocking_fifo,
@@ -24,6 +25,7 @@ enum {
 
 static const match_table_t tokens = {
 	{opt_event_mask, "event_mask=%u"},
+	{opt_lock_mask, "lock_mask=%u"},
 	{opt_fifo_size, "fifo_size=%u"},
 	{opt_blocking_fifo, "blocking_fifo"},
 	{opt_non_blocking_fifo, "non_blocking_fifo"},
@@ -33,6 +35,7 @@ static const match_table_t tokens = {
 typedef struct notifyfs_mount_options {
 	const char *source_dir;
 	u32 event_mask;
+	u32 lock_mask;
 	u32 fifo_size;
 	u32 fifo_block;
 } notifyfs_mount_options;
@@ -71,6 +74,15 @@ static int parse_options(char *options, struct notifyfs_mount_options *opts) {
 				}
 				UDBG;
 				opts->event_mask = option;
+				break;
+			case opt_lock_mask:
+				UDBG;
+				err = match_int(&args[0], &option);
+				if (err != 0) {
+					return err;
+				}
+				UDBG;
+				opts->lock_mask = option;
 				break;
 			case opt_fifo_size:
 				UDBG;
@@ -181,27 +193,32 @@ static int notifyfs_read_super(struct super_block *sb, void *data,
 	spd = NOTIFYFS_SB(sb);
 	atomic64_set(&spd->event_id, 0);
 	atomic_set(&spd->event_mask, opts->event_mask);
+	atomic_set(&spd->lock_mask, opts->lock_mask);
 	atomic_set(&spd->fifo_block, opts->fifo_block);
-	atomic_set(&spd->unmounting, 0);
+//	atomic_set(&spd->unmounting, 0);
 
 	spd->proc_dir = create_proc_mount_dir(lower_path.dentry->d_inode->i_ino);
 	CHECK_PTR(spd->proc_dir, out_free_private_data);
 	spd->proc_source = create_src_dir_file(sb, spd->proc_dir);
-	CHECK_PTR(spd->proc_source, out_free_dir);
+	CHECK_PTR(spd->proc_source, out_free_proc);
 	spd->proc_events = create_events_file(spd, spd->proc_dir);
-	CHECK_PTR(spd->proc_events, out_free_source);
-	spd->proc_event_mask = create_mask_file(spd, spd->proc_dir);
-	CHECK_PTR(spd->proc_event_mask, out_free_events);
+	CHECK_PTR(spd->proc_events, out_free_proc);
+	spd->proc_event_mask = create_event_mask_file(spd, spd->proc_dir);
+	CHECK_PTR(spd->proc_event_mask, out_free_proc);
+	spd->proc_global_lock = create_global_lock_file(spd, spd->proc_dir);
+	CHECK_PTR(spd->proc_global_lock, out_free_proc);
+	spd->proc_lock_mask = create_lock_mask_file(spd, spd->proc_dir);
+	CHECK_PTR(spd->proc_lock_mask, out_free_proc);
 	spd->proc_fifo_block = create_fifo_block_file(spd, spd->proc_dir);
-	CHECK_PTR(spd->proc_fifo_block, out_free_mask);
+	CHECK_PTR(spd->proc_fifo_block, out_free_proc);
 	spd->proc_fifo_size = create_fifo_size_file(spd, spd->proc_dir);
-	CHECK_PTR(spd->proc_fifo_size, out_free_fifo_block);
+	CHECK_PTR(spd->proc_fifo_size, out_free_proc);
 	spd->proc_pid_blacklist = create_pid_blacklist_file(spd, spd->proc_dir);
-	CHECK_PTR(spd->proc_pid_blacklist, out_free_fifo_size);
+	CHECK_PTR(spd->proc_pid_blacklist, out_free_proc);
 
 	err = kfifo_alloc(&spd->fifo, opts->fifo_size, GFP_KERNEL);
 	if (err != 0) {
-		goto out_free_pid_blacklist;
+		goto out_free_proc;
 	}
 	err = int_list_alloc(&spd->pids, 8);
 	if (err != 0) {
@@ -209,6 +226,8 @@ static int notifyfs_read_super(struct super_block *sb, void *data,
 	}
 	spin_lock_init(&spd->fifo_lock);
 	spin_lock_init(&spd->pids_lock);
+	init_rwsem(&spd->global_lock);
+	spin_lock_init(&spd->global_write_spinlock);
 	init_waitqueue_head(&spd->writeable);
 	init_waitqueue_head(&spd->readable);
 	/* end notifier support */
@@ -230,20 +249,34 @@ static int notifyfs_read_super(struct super_block *sb, void *data,
 /* notifier support */
 out_free_fifo:
 	kfifo_free(&spd->fifo);
-out_free_pid_blacklist:
-	remove_proc_entry(PROC_PID_BLACKLIST_FILE, spd->proc_dir);
-out_free_fifo_size:
-	remove_proc_entry(PROC_FIFO_SIZE_FILE, spd->proc_dir);
-out_free_fifo_block:
-	remove_proc_entry(PROC_FIFO_BLOCK_FILE, spd->proc_dir);
-out_free_mask:
-	remove_proc_entry(PROC_EVENT_MASK_FILE, spd->proc_dir);
-out_free_events:
-	remove_proc_entry(PROC_EVENTS_FILE, spd->proc_dir);
-out_free_source:
-	remove_proc_entry(PROC_SRC_DIR_FILE, spd->proc_dir);
-out_free_dir:
-	destroy_proc_mount_dir(spd->proc_dir);
+out_free_proc:
+	if (spd->proc_pid_blacklist) {
+		remove_proc_entry(PROC_PID_BLACKLIST_FILE, spd->proc_dir);
+	}
+	if (spd->proc_fifo_size) {
+		remove_proc_entry(PROC_FIFO_SIZE_FILE, spd->proc_dir);
+	}
+	if (spd->proc_fifo_block) {
+		remove_proc_entry(PROC_FIFO_BLOCK_FILE, spd->proc_dir);
+	}
+	if (spd->proc_lock_mask) {
+		remove_proc_entry(PROC_LOCK_MASK_FILE, spd->proc_dir);
+	}
+	if (spd->proc_global_lock) {
+		remove_proc_entry(PROC_GLOBAL_LOCK_FILE, spd->proc_dir);
+	}
+	if (spd->proc_event_mask) {
+		remove_proc_entry(PROC_EVENT_MASK_FILE, spd->proc_dir);
+	}
+	if (spd->proc_events) {
+		remove_proc_entry(PROC_EVENT_MASK_FILE, spd->proc_dir);
+	}
+	if (spd->proc_source) {
+		remove_proc_entry(PROC_SRC_DIR_FILE, spd->proc_dir);
+	}
+	if (spd->proc_dir) {
+		destroy_proc_mount_dir(spd->proc_dir);
+	}
 out_free_private_data:
 	free_dentry_private_data(sb->s_root);
 /* end notifier support */
@@ -270,6 +303,7 @@ struct dentry *notifyfs_mount(struct file_system_type *fs_type, int flags,
 	/* notifier support */
 	mount_opts.source_dir = dev_name;
 	mount_opts.event_mask = DEFAULT_EVENTS_MASK;
+	mount_opts.lock_mask = DEFAULT_LOCKS_MASK;
 	mount_opts.fifo_size = DEFAULT_FIFO_SIZE;
 	mount_opts.fifo_block = DEFAULT_FIFO_BLOCK;
 	/* end notifier support */

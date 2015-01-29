@@ -32,6 +32,8 @@
 #include <linux/sched.h>
 /* atomic values in notifyfs_sb_info */
 #include <linux/atomic.h>
+/* global replicator mutex */
+#include <linux/rwsem.h>
 
 /* the file system name */
 #define NOTIFYFS_NAME "notifyfs"
@@ -94,18 +96,20 @@ struct notifyfs_sb_info {
 
 	/* notifier support */
 	// configuration
-	atomic_t event_mask;	/* current event mask -- mount option */
-	atomic_t fifo_block;	/* mount option */
+	atomic_t event_mask;    /* current event mask -- mount option */
+	atomic_t lock_mask;     /* current mutex mask -- mount option */
+	atomic_t fifo_block;    /* mount option */
 
 	// proc entries
 	struct proc_dir_entry *proc_dir;	/* proc mount dir, named after inode */
 	struct proc_dir_entry *proc_source;	/* source folder file */
 	struct proc_dir_entry *proc_events;	/* events file */
 	struct proc_dir_entry *proc_event_mask;	/* event mask */
+	struct proc_dir_entry *proc_global_lock;	/* global lock */
+	struct proc_dir_entry *proc_lock_mask;	/* lock mask */
 	struct proc_dir_entry *proc_fifo_block;	/* fifo block */
 	struct proc_dir_entry *proc_fifo_size;	/* fifo size */
 	struct proc_dir_entry *proc_pid_blacklist;	/* pid blacklist file */
-//	struct proc_dir_entry *proc_open;	/* blocking open */
 
 	// event fifo
 	struct kfifo fifo;
@@ -122,8 +126,12 @@ struct notifyfs_sb_info {
 	struct int_list_t pids;
 	spinlock_t pids_lock;
 
+	// lock management
+	struct rw_semaphore global_lock;
+	spinlock_t global_write_spinlock; /* synchronize accesses to the semaphore */
+
 	// graceful shutdown
-	atomic_t unmounting;	/* if != 0, then fs is being unmounted */
+//	atomic_t unmounting;	/* if != 0, then fs is being unmounted */
 	/* end notifier support */
 };
 

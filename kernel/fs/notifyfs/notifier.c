@@ -69,9 +69,9 @@ int should_send(struct super_block *sb, fs_event_header *header) {
 
 	event_mask = atomic_read(&spd->event_mask);
 	if (event_mask & header->operation) {
-		spin_lock(&(spd->pids_lock));
+		spin_lock(&spd->pids_lock);
 		contains_pid = int_list_contains(&spd->pids, header->pid);
-		spin_unlock(&(spd->pids_lock));
+		spin_unlock(&spd->pids_lock);
 		/* contains_pid could be greater than zero if found,
 		 * or less than zero if error */
 		if (!contains_pid) {
@@ -351,15 +351,99 @@ out:
  *   -ENOMEM if unable to allocate memory for strings
  *   -ENAMETOOLONG from path to string conversion
  */
-int send_file_event(struct super_block *sb, const fs_operation_type opType, const struct file *file) {
+int send_file_event(struct super_block *sb, const fs_operation_type op, const struct file *file) {
 	int err = 0;
 
 	CHECK_NULL(sb, out);
 	CHECK_NULL(file, out);
-	err = send_dentry_event(sb, opType, file->f_path.dentry);
+	err = send_dentry_event(sb, op, file->f_path.dentry);
 
 out:
 	return err;
+}
+
+void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_type op) {
+	struct notifyfs_sb_info *spd = sb->s_fs_info;
+	pid_t pid = current->pid;
+	u32 lock_mask;
+	int contains_pid;
+	*unlock = 0;
+
+	lock_mask = atomic_read(&spd->lock_mask);
+	if (lock_mask & op) {
+		spin_lock(&spd->pids_lock);
+		contains_pid = int_list_contains(&spd->pids, pid);
+		spin_unlock(&spd->pids_lock);
+
+		BUG_ON(contains_pid < 0);
+		/*
+		 * If the current PID is on the blacklist,
+		 * then no locking is necessary
+		 */
+		if (!contains_pid) {
+			UDBG;
+			down_read(&spd->global_lock);
+			*unlock = 1;
+		}
+	}
+}
+
+void vfs_lock_release(struct super_block *sb, int *unlock) {
+	struct notifyfs_sb_info *spd = sb->s_fs_info;
+	if (*unlock) {
+		UDBG;
+		up_read(&spd->global_lock);
+		*unlock = 0;
+	}
+}
+
+void replicator_lock_acquire(struct notifyfs_sb_info *spd) {
+	unsigned long flags;
+	int32_t activity;
+
+	spin_lock(&spd->global_write_spinlock);
+
+	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
+	activity = spd->global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+
+	/* only acquire if not yet acquired for write */
+	if (activity >= 0) {
+		UDBG;
+		down_write(&spd->global_lock);
+	}
+
+	spin_unlock(&spd->global_write_spinlock);
+}
+
+void replicator_lock_release(struct notifyfs_sb_info *spd) {
+	unsigned long flags;
+	int32_t activity;
+
+	spin_lock(&spd->global_write_spinlock);
+
+	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
+	activity = spd->global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+
+	/* only release if acquired for write */
+	if (activity < 0) {
+		UDBG;
+		up_write(&spd->global_lock);
+	}
+
+	spin_unlock(&spd->global_write_spinlock);
+}
+
+int32_t replicator_lock_status(struct notifyfs_sb_info *spd) {
+	unsigned long flags;
+	int32_t activity;
+
+	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
+	activity = spd->global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+
+	return activity != 0;
 }
 
 /*
@@ -452,9 +536,9 @@ static ssize_t proc_events_read(struct file *file, char *buf, size_t count,
 		}
 	}
 	/* This mount is being shutdown. Return 0 to close the events proc file. */
-	if (atomic_read(&spd->unmounting)) {
-		return 0;
-	}
+//	if (atomic_read(&spd->unmounting)) {
+//		return 0;
+//	}
 	spin_lock(&(spd->fifo_lock));
 	err = kfifo_to_user(&(spd->fifo), buf, count, &copied);
 	spin_unlock(&(spd->fifo_lock));
@@ -488,7 +572,7 @@ static unsigned int proc_events_poll(struct file *file,
 	poll_wait(file, &spd->writeable, pt);
 	poll_wait(file, &spd->readable, pt);
 
-	if (atomic_read(&spd->unmounting) || !kfifo_is_empty(&spd->fifo)) {
+	if (!kfifo_is_empty(&spd->fifo)) {
 		mask |= POLLIN | POLLRDNORM;
 	}
 //	if (!kfifo_is_full(&spd->fifo)) {
@@ -507,9 +591,9 @@ struct proc_dir_entry *create_events_file(void *data, struct proc_dir_entry *dir
 	return proc_create_data(PROC_EVENTS_FILE, 0444, dir, &proc_events_fops, data);
 }
 
-/***** mask file *****/
+/***** event mask file *****/
 
-static ssize_t proc_mask_read(struct file *file, char *buf, size_t count,
+static ssize_t proc_event_mask_read(struct file *file, char *buf, size_t count,
 		loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
@@ -547,7 +631,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_mask_write(struct file *file, const char *buf, size_t count,
+static ssize_t proc_event_mask_write(struct file *file, const char *buf, size_t count,
 		loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
@@ -561,7 +645,7 @@ static ssize_t proc_mask_write(struct file *file, const char *buf, size_t count,
 
 	err = kstrtoul(buf, 0, &event_mask);
 	if (err) {
-		pr_warn(NOTIFYFS_NAME ": unable to set mask %s on mount %s\n", buf, spd->proc_dir->name);
+		pr_warn(NOTIFYFS_NAME ": unable to set event mask %s on mount %s\n", buf, spd->proc_dir->name);
 		goto out;
 	}
 
@@ -572,13 +656,165 @@ out:
 	return err;
 }
 
-static const struct file_operations proc_mask_fops = {
-	.read = proc_mask_read,
-	.write = proc_mask_write
+static const struct file_operations proc_event_mask_fops = {
+	.read = proc_event_mask_read,
+	.write = proc_event_mask_write
 };
 
-struct proc_dir_entry *create_mask_file(void *data, struct proc_dir_entry *dir) {
-	return proc_create_data(PROC_EVENT_MASK_FILE, 0664, dir, &proc_mask_fops, data);
+struct proc_dir_entry *create_event_mask_file(void *data, struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_EVENT_MASK_FILE, 0664, dir, &proc_event_mask_fops, data);
+}
+
+/***** global lock file *****/
+
+static ssize_t proc_global_lock_read(struct file *file, char *buf, size_t count,
+		loff_t *offp) {
+	int err;
+	struct notifyfs_sb_info *spd;
+	int32_t lock_status;
+
+	spd = PDE(file->f_path.dentry->d_inode)->data;
+	if (spd == NULL) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (*offp > 0) {
+		/* read complete */
+		err = 0;
+		goto out;
+	} else {
+		lock_status = replicator_lock_status(spd);
+		err = snprintf(buf, count, "%d\n", lock_status);
+		if (err >= count) {
+			/* not enough space in the buffer */
+			err = -EINVAL;
+			goto out;
+		}
+		err++; /* include the null terminator */
+		*offp = err;
+	}
+
+out:
+	return err;
+}
+
+/*
+ * Returns
+ *   0 on success
+ *   -ERANGE on overflow
+ *   -EINVAL on parsing error
+ */
+static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t count,
+		loff_t *offp) {
+	int err;
+	struct notifyfs_sb_info *spd;
+	unsigned long int lock_value;
+
+	spd = PDE(file->f_path.dentry->d_inode)->data;
+	if (spd == NULL) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	err = kstrtoul(buf, 0, &lock_value);
+	if (err) {
+		pr_warn(NOTIFYFS_NAME ": unable to parse lock status %s on mount %s\n", buf, spd->proc_dir->name);
+		goto out;
+	}
+
+	if (lock_value) {
+		replicator_lock_acquire(spd);
+	} else {
+		replicator_lock_release(spd);
+	}
+	err = count; /* consider all data written */
+
+out:
+	return err;
+}
+
+static const struct file_operations proc_global_lock_fops = {
+	.read = proc_global_lock_read,
+	.write = proc_global_lock_write
+};
+
+struct proc_dir_entry *create_global_lock_file(void *data, struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_GLOBAL_LOCK_FILE, 0664, dir, &proc_global_lock_fops, data);
+}
+
+/***** lock mask file *****/
+
+static ssize_t proc_lock_mask_read(struct file *file, char *buf, size_t count,
+		loff_t *offp) {
+	int err;
+	struct notifyfs_sb_info *spd;
+	int lock_mask;
+
+	spd = PDE(file->f_path.dentry->d_inode)->data;
+	if (spd == NULL) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	if (*offp > 0) {
+		/* read complete */
+		err = 0;
+		goto out;
+	} else {
+		lock_mask = atomic_read(&spd->lock_mask);
+		err = snprintf(buf, count, "%d\n", lock_mask);
+		if (err >= count) {
+			/* not enough space in the buffer */
+			err = -EINVAL;
+			goto out;
+		}
+		err++; /* include the null terminator */
+		*offp = err;
+	}
+
+out:
+	return err;
+}
+
+/*
+ * Returns
+ *   0 on success
+ *   -ERANGE on overflow
+ *   -EINVAL on parsing error
+ */
+static ssize_t proc_lock_mask_write(struct file *file, const char *buf, size_t count,
+		loff_t *offp) {
+	int err;
+	struct notifyfs_sb_info *spd;
+	unsigned long int lock_mask;
+
+	spd = PDE(file->f_path.dentry->d_inode)->data;
+	if (spd == NULL) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	err = kstrtoul(buf, 0, &lock_mask);
+	if (err) {
+		pr_warn(NOTIFYFS_NAME ": unable to set lock mask %s on mount %s\n", buf, spd->proc_dir->name);
+		goto out;
+	}
+
+	atomic_set(&spd->lock_mask, lock_mask);
+	err = count; /* consider all data written */
+
+out:
+	return err;
+}
+
+static const struct file_operations proc_lock_mask_fops = {
+	.read = proc_lock_mask_read,
+	.write = proc_lock_mask_write
+};
+
+struct proc_dir_entry *create_lock_mask_file(void *data, struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_LOCK_MASK_FILE, 0664, dir, &proc_lock_mask_fops, data);
 }
 
 /***** fifo block file *****/

@@ -21,6 +21,8 @@
 #define PROC_SRC_DIR_FILE "source"
 #define PROC_EVENTS_FILE "events"
 #define PROC_EVENT_MASK_FILE "event_mask"
+#define PROC_GLOBAL_LOCK_FILE "global_lock"
+#define PROC_LOCK_MASK_FILE "lock_mask"
 #define PROC_FIFO_BLOCK_FILE "fifo_block"
 #define PROC_FIFO_SIZE_FILE "fifo_size"
 #define PROC_PID_BLACKLIST_FILE "pid_blacklist"
@@ -30,6 +32,10 @@ int send_file_event(struct super_block *sb, const fs_operation_type op, const st
 int send_dentry_event(struct super_block *sb, const fs_operation_type op, struct dentry *dentry);
 
 int send_dentry_rename(struct super_block *sb, const fs_operation_type op, struct inode *inode, const char *old_name, const char *new_name);
+
+void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_type op);
+
+void vfs_lock_release(struct super_block *sb, int *unlock);
 
 int create_proc_dir(void);
 
@@ -43,7 +49,11 @@ struct proc_dir_entry *create_src_dir_file(void *data, struct proc_dir_entry *di
 
 struct proc_dir_entry *create_events_file(void *data, struct proc_dir_entry *dir);
 
-struct proc_dir_entry *create_mask_file(void *data, struct proc_dir_entry *dir);
+struct proc_dir_entry *create_event_mask_file(void *data, struct proc_dir_entry *dir);
+
+struct proc_dir_entry *create_global_lock_file(void *data, struct proc_dir_entry *dir);
+
+struct proc_dir_entry *create_lock_mask_file(void *data, struct proc_dir_entry *dir);
 
 struct proc_dir_entry *create_fifo_block_file(void *data, struct proc_dir_entry *dir);
 

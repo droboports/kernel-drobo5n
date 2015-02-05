@@ -95,43 +95,7 @@ struct notifyfs_sb_info {
 	struct super_block *lower_sb;
 
 	/* notifier support */
-	// configuration
-	atomic_t event_mask;    /* current event mask -- mount option */
-	atomic_t lock_mask;     /* current mutex mask -- mount option */
-	atomic_t fifo_block;    /* mount option */
-
-	// proc entries
-	struct proc_dir_entry *proc_dir;	/* proc mount dir, named after inode */
-	struct proc_dir_entry *proc_source;	/* source folder file */
-	struct proc_dir_entry *proc_events;	/* events file */
-	struct proc_dir_entry *proc_event_mask;	/* event mask */
-	struct proc_dir_entry *proc_global_lock;	/* global lock */
-	struct proc_dir_entry *proc_lock_mask;	/* lock mask */
-	struct proc_dir_entry *proc_fifo_block;	/* fifo block */
-	struct proc_dir_entry *proc_fifo_size;	/* fifo size */
-	struct proc_dir_entry *proc_pid_blacklist;	/* pid blacklist file */
-
-	// event fifo
-	struct kfifo fifo;
-	spinlock_t fifo_lock;
-	wait_queue_head_t writeable;
-	wait_queue_head_t readable;
-
-	// event management
-	atomic64_t event_id;	/* current event number -- counter */
-	// last event
-	struct fs_event_header last_event;
-
-	// pid blacklist
-	struct int_list_t pids;
-	spinlock_t pids_lock;
-
-	// lock management
-	struct rw_semaphore global_lock;
-	spinlock_t global_write_spinlock; /* synchronize accesses to the semaphore */
-
-	// graceful shutdown
-//	atomic_t unmounting;	/* if != 0, then fs is being unmounted */
+	struct notifier_info notifier_info;
 	/* end notifier support */
 };
 

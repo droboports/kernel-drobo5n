@@ -28,29 +28,26 @@ static void notifyfs_put_super(struct super_block *sb) {
 		return;
 	}
 
+	UDBG;
+
 	/* decrement lower super references */
 	s = notifyfs_lower_super(sb);
 	notifyfs_set_lower_super(sb, NULL);
 	atomic_dec(&s->s_active);
 
 	/* notifier support */
-	// unblock any readers of the events file
-//	atomic_set(&spd->unmounting, 1);
-//	if (atomic_read(&spd->fifo_block) == BLOCKING_FIFO) {
-//		wake_up_interruptible(&spd->readable);
-//	}
-	remove_proc_entry(PROC_PID_BLACKLIST_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_FIFO_SIZE_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_FIFO_BLOCK_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_LOCK_MASK_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_GLOBAL_LOCK_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_EVENT_MASK_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_EVENTS_FILE, spd->proc_dir);
-	remove_proc_entry(PROC_SRC_DIR_FILE, spd->proc_dir);
-	destroy_proc_mount_dir(spd->proc_dir);
+	remove_proc_entry(PROC_PID_BLACKLIST_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_FIFO_SIZE_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_FIFO_BLOCK_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_LOCK_MASK_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_GLOBAL_LOCK_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_EVENT_MASK_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_EVENTS_FILE, spd->notifier_info.proc_dir);
+	remove_proc_entry(PROC_SRC_DIR_FILE, spd->notifier_info.proc_dir);
+	destroy_proc_mount_dir(spd->notifier_info.proc_dir);
 
-	kfifo_free(&spd->fifo);
-	int_list_free(&spd->pids);
+	kfifo_free(&spd->notifier_info.fifo);
+	int_list_free(&spd->notifier_info.pids);
 	/* end notifier support */
 
 	kfree(spd);
@@ -61,6 +58,7 @@ static int notifyfs_statfs(struct dentry *dentry, struct kstatfs *buf) {
 	int err;
 	struct path lower_path;
 
+	UDBG;
 	notifyfs_get_lower_path(dentry, &lower_path);
 	err = vfs_statfs(&lower_path, buf);
 	notifyfs_put_lower_path(dentry, &lower_path);
@@ -79,6 +77,7 @@ static int notifyfs_remount_fs(struct super_block *sb, int *flags,
 		char *options) {
 	int err = 0;
 
+	UDBG;
 	/*
 	 * The VFS will take care of "ro" and "rw" flags among others.  We
 	 * can safely accept a few flags (RDONLY, MANDLOCK), and honor
@@ -88,6 +87,9 @@ static int notifyfs_remount_fs(struct super_block *sb, int *flags,
 		pr_err(NOTIFYFS_NAME ": remount flags 0x%x unsupported\n", *flags);
 		err = -EINVAL;
 	}
+
+	/* notify remount */
+	err = send_mnt_event(sb, FS_MNT_REMOUNT);
 
 	return err;
 }
@@ -141,6 +143,7 @@ static void init_once(void *obj) {
 int notifyfs_init_inode_cache(void) {
 	int err = 0;
 
+	UDBG;
 	notifyfs_inode_cachep = kmem_cache_create("notifyfs_inode_cache",
 			sizeof(struct notifyfs_inode_info), 0,
 			SLAB_RECLAIM_ACCOUNT, init_once);
@@ -153,6 +156,7 @@ int notifyfs_init_inode_cache(void) {
 /* notifyfs inode cache destructor */
 void notifyfs_destroy_inode_cache(void) {
 	if (notifyfs_inode_cachep) {
+		UDBG;
 		kmem_cache_destroy(notifyfs_inode_cachep);
 	}
 }
@@ -166,6 +170,7 @@ static void notifyfs_umount_begin(struct super_block *sb) {
 
 	lower_sb = notifyfs_lower_super(sb);
 	if (lower_sb && lower_sb->s_op && lower_sb->s_op->umount_begin) {
+		UDBG;
 		lower_sb->s_op->umount_begin(lower_sb);
 	}
 }
@@ -175,19 +180,19 @@ static int notifyfs_show_options(struct seq_file *seq, struct vfsmount *mnt) {
 	struct super_block *sb = mnt->mnt_sb;
 	struct notifyfs_sb_info *spd = NOTIFYFS_SB(sb);
 
-	err = seq_printf(seq, ",event_mask=%u", atomic_read(&spd->event_mask));
+	err = seq_printf(seq, ",event_mask=%u", atomic_read(&spd->notifier_info.event_mask));
 	if (err < 0) {
 		goto out;
 	}
-	err = seq_printf(seq, ",lock_mask=%u", atomic_read(&spd->lock_mask));
+	err = seq_printf(seq, ",lock_mask=%u", atomic_read(&spd->notifier_info.lock_mask));
 	if (err < 0) {
 		goto out;
 	}
-	err = seq_printf(seq, ",fifo_size=%u", kfifo_size(&spd->fifo));
+	err = seq_printf(seq, ",fifo_size=%u", kfifo_size(&spd->notifier_info.fifo));
 	if (err < 0) {
 		goto out;
 	}
-	if (atomic_read(&spd->fifo_block) == NONBLOCKING_FIFO) {
+	if (atomic_read(&spd->notifier_info.fifo_block) == NONBLOCKING_FIFO) {
 		err = seq_puts(seq, ",non_blocking_fifo");
 	} else {
 		err = seq_puts(seq, ",blocking_fifo");

@@ -18,14 +18,14 @@
  * Total length of fs_event: sizeof(header) + strlen(path1) + strlen(path2)
  */
 typedef struct fs_event_header {
-	u64    event_id;   /* event id, a monotonically increasing counter */
-	u32    operation;  /* see FsOperationType */
-	ino_t  inode;      /* inode affected */
-	time_t time;       /* see timespec.tv_sec */
-	long   time_ns;    /* see timespec.tv_nsec */
-	pid_t  pid;        /* PID that caused the event */
-	size_t path_len1;  /* size of the string that follows the header */
-	size_t path_len2;  /* size of the string that follows the previous string */
+	uint64_t event_id;   /* event id, a monotonically increasing counter */
+	uint32_t operation;  /* see FsOperationType */
+	ino_t    inode;      /* inode affected */
+	time_t   mtime;      /* see timespec.tv_sec */
+	long     mtime_ns;   /* see timespec.tv_nsec */
+	pid_t    pid;        /* PID that caused the event */
+	size_t   path_len1;  /* size of the string that follows the header */
+	size_t   path_len2;  /* size of the string that follows the previous string */
 } fs_event_header;
 
 /*
@@ -36,40 +36,47 @@ typedef struct fs_event_header {
 typedef enum fs_operation_type {
 	FS_UNSUPPORTED   = 0x00000000,	/* reserved for unsupported operations */
 
-	FS_FILE_MASK     = 0x00001000,	/* all file events mask */
-	FS_FILE_CREATE   = 0x00001001,	/* new file */
-	FS_FILE_FLUSH    = 0x00001002,	/* flush file */
-	FS_FILE_MOVE     = 0x00001004,	/* file moved or renamed */
-	FS_FILE_DELETE   = 0x00001008,	/* file deleted */
-	FS_FILE_OPEN     = 0x00001010,	/* file opened */
-	FS_FILE_READ     = 0x00001020,	/* read access to file */
-	FS_FILE_WRITE    = 0x00001040,	/* write access to file */
-	FS_FILE_CLOSE    = 0x00001080,	/* file closed */
-	FS_FILE_RATTRIB  = 0x00001100,	/* reading metadata (e.g. mtime) */
-	FS_FILE_WATTRIB  = 0x00001200,	/* changing metadata (e.g. mtime) */
-	FS_FILE_RXATTRIB = 0x00001400,	/* reading extended attributes */
-	FS_FILE_WXATTRIB = 0x00001800,	/* changing extended attributes */
+	FS_FILE_MASK     = 0x00000FFF,	/* all file events mask */
+	FS_FILE_CREATE   = 0x00000001,	/* new file */
+	FS_FILE_FLUSH    = 0x00000002,	/* flush file */
+	FS_FILE_MOVE     = 0x00000004,	/* file moved or renamed */
+	FS_FILE_DELETE   = 0x00000008,	/* file deleted */
+	FS_FILE_OPEN     = 0x00000010,	/* file opened */
+	FS_FILE_READ     = 0x00000020,	/* read access to file */
+	FS_FILE_WRITE    = 0x00000040,	/* write access to file */
+	FS_FILE_CLOSE    = 0x00000080,	/* file closed */
+	FS_FILE_RATTRIB  = 0x00000100,	/* reading metadata (e.g. mtime) */
+	FS_FILE_WATTRIB  = 0x00000200,	/* changing metadata (e.g. mtime) */
+	FS_FILE_RXATTRIB = 0x00000400,	/* reading extended attributes */
+	FS_FILE_WXATTRIB = 0x00000800,	/* changing extended attributes */
 
-	FS_DIR_MASK      = 0x00002000,	/* all dir events mask */
-	FS_DIR_CREATE    = 0x00002001,	/* new directory */
-	FS_DIR_FLUSH     = 0x00002002,	/* flush dir */
-	FS_DIR_MOVE      = 0x00002004,	/* directory moved or renamed */
-	FS_DIR_DELETE    = 0x00002008,	/* directory deleted */
-	FS_DIR_OPEN      = 0x00002010,	/* dir opened */
-	FS_DIR_READ      = 0x00002020,	/* readdir */
-	FS_DIR_WRITE     = 0x00002040,	/* unused / reserved */
-	FS_DIR_CLOSE     = 0x00002080,	/* dir closed */
-	FS_DIR_RATTRIB   = 0x00002100,	/* reading metadata (e.g. mtime) */
-	FS_DIR_WATTRIB   = 0x00002200,	/* changing metadata (e.g. mtime) */
-	FS_DIR_RXATTRIB  = 0x00002400,	/* reading extended attributes */
-	FS_DIR_WXATTRIB  = 0x00002800	/* changing extended attributes */
+	FS_DIR_MASK      = 0x00FFF000,	/* all dir events mask */
+	FS_DIR_CREATE    = 0x00001000,	/* new directory */
+	FS_DIR_FLUSH     = 0x00002000,	/* flush dir */
+	FS_DIR_MOVE      = 0x00004000,	/* directory moved or renamed */
+	FS_DIR_DELETE    = 0x00008000,	/* directory deleted */
+	FS_DIR_OPEN      = 0x00010000,	/* dir opened */
+	FS_DIR_READ      = 0x00020000,	/* readdir */
+	FS_DIR_WRITE     = 0x00040000,	/* unused / reserved */
+	FS_DIR_CLOSE     = 0x00080000,	/* dir closed */
+	FS_DIR_RATTRIB   = 0x00100000,	/* reading metadata (e.g. mtime) */
+	FS_DIR_WATTRIB   = 0x00200000,	/* changing metadata (e.g. mtime) */
+	FS_DIR_RXATTRIB  = 0x00400000,	/* reading extended attributes */
+	FS_DIR_WXATTRIB  = 0x00800000,	/* changing extended attributes */
+
+	FS_MNT_MASK      = 0x0F000000,	/* all mount events mask */
+	FS_MNT_MOUNT     = 0x01000000,	/* new mount */
+	FS_MNT_REMOUNT   = 0x02000000,	/* remounting fs -- currently unsupported */
+	FS_MNT_MOVE      = 0x04000000,	/* moving the mount to another location -- currently unsupported */
+	FS_MNT_UMOUNT    = 0x08000000,	/* unmount fs */
 } fs_operation_type;
 
 /* Default event mask captures all changes */
 #define DEFAULT_EVENTS_MASK (FS_FILE_CREATE | FS_FILE_MOVE | FS_FILE_DELETE \
 							| FS_FILE_WRITE | FS_FILE_WATTRIB | FS_FILE_WXATTRIB \
 							| FS_DIR_CREATE | FS_DIR_MOVE | FS_DIR_DELETE \
-							| FS_DIR_WATTRIB | FS_DIR_WXATTRIB);
+							| FS_DIR_WATTRIB | FS_DIR_WXATTRIB \
+							| FS_MNT_MOUNT | FS_MNT_UMOUNT);
 
 /* Default lock mask captures all events */
 #define DEFAULT_LOCKS_MASK (FS_FILE_MASK | FS_DIR_MASK);
@@ -83,7 +90,7 @@ typedef enum fs_fifo_block {
 #define DEFAULT_FIFO_BLOCK BLOCKING_FIFO
 
 /* fifo size in bytes, this must be a power of 2 */
-#define DEFAULT_FIFO_SIZE 4096;
+#define DEFAULT_FIFO_SIZE 65536;
 
 /* support paths up to 1 KiB characters */
 // up to 1024 characters in UTF-32

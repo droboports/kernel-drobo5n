@@ -27,11 +27,62 @@
 #define PROC_FIFO_SIZE_FILE "fifo_size"
 #define PROC_PID_BLACKLIST_FILE "pid_blacklist"
 
+struct notifier_info {
+	// configuration
+	/* current event mask -- mount option */
+	atomic_t event_mask;
+	/* current mutex mask -- mount option */
+	atomic_t lock_mask;
+	/* blocking fifo for events -- mount option */
+	atomic_t fifo_block;
+
+	// proc entries
+	/* proc mount dir, named after inode */
+	struct proc_dir_entry *proc_dir;
+	/* source folder file */
+	struct proc_dir_entry *proc_source;
+	/* events file */
+	struct proc_dir_entry *proc_events;
+	/* event mask */
+	struct proc_dir_entry *proc_event_mask;
+	/* global access lock */
+	struct proc_dir_entry *proc_global_lock;
+	/* global access lock mask */
+	struct proc_dir_entry *proc_lock_mask;
+	/* fifo block */
+	struct proc_dir_entry *proc_fifo_block;
+	/* fifo size */
+	struct proc_dir_entry *proc_fifo_size;
+	/* pid blacklist file */
+	struct proc_dir_entry *proc_pid_blacklist;
+
+	// event fifo
+	struct kfifo fifo;
+	spinlock_t fifo_lock;
+	wait_queue_head_t writeable;
+	wait_queue_head_t readable;
+
+	// event management
+	/* current event number -- counter */
+	atomic64_t event_id;
+
+	// pid blacklist
+	struct int_list_t pids;
+	spinlock_t pids_lock;
+
+	// lock management
+	struct rw_semaphore global_lock;
+	/* synchronize accesses to the semaphore */
+	spinlock_t global_write_spinlock;
+};
+
 int send_file_event(struct super_block *sb, const fs_operation_type op, const struct file *file);
 
 int send_dentry_event(struct super_block *sb, const fs_operation_type op, struct dentry *dentry);
 
 int send_dentry_rename(struct super_block *sb, const fs_operation_type op, struct inode *inode, const char *old_name, const char *new_name);
+
+int send_mnt_event(struct super_block *sb, const fs_operation_type op);
 
 void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_type op);
 

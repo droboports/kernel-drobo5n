@@ -8,8 +8,6 @@
 
 #include "notifyfs.h"
 
-#define STRINGIFY_EVENT 1
-
 /* maximum length in decimal of a 64 bit integer */
 #define STR_U64 20
 /* maximum length in decimal of a 32 bit integer */
@@ -42,8 +40,8 @@ void * create_notifyfs_event(const pid_t pid, const fs_operation_type op,
 	header = (fs_event_header *) buffer;
 	header->operation = op;
 	header->inode = inode;
-	header->time = ts.tv_sec;
-	header->time_ns = ts.tv_nsec;
+	header->mtime = ts.tv_sec;
+	header->mtime_ns = ts.tv_nsec;
 	header->pid = pid;
 	header->path_len1 = old_name_len;
 	header->path_len2 = new_name_len;
@@ -63,70 +61,31 @@ void destroy_notifyfs_event(void *buffer) {
  */
 int should_send(struct super_block *sb, fs_event_header *header) {
 	struct notifyfs_sb_info *spd = sb->s_fs_info;
-	struct fs_event_header last_event = spd->last_event;
+//	struct fs_event_header last_event = spd->last_event;
 	u32 event_mask;
 	int contains_pid;
 
-	event_mask = atomic_read(&spd->event_mask);
+	event_mask = atomic_read(&spd->notifier_info.event_mask);
 	if (event_mask & header->operation) {
-		spin_lock(&spd->pids_lock);
-		contains_pid = int_list_contains(&spd->pids, header->pid);
-		spin_unlock(&spd->pids_lock);
+		spin_lock(&spd->notifier_info.pids_lock);
+		contains_pid = int_list_contains(&spd->notifier_info.pids, header->pid);
+		spin_unlock(&spd->notifier_info.pids_lock);
 		/* contains_pid could be greater than zero if found,
 		 * or less than zero if error */
 		if (!contains_pid) {
-			if (
-				last_event.operation != header->operation ||
-				last_event.inode != header->inode ||
-				last_event.time != header->time ||
-				last_event.time_ns != header->time_ns ||
-				last_event.pid != header->pid
-				) {
+//			if (
+//				last_event.operation != header->operation ||
+//				last_event.inode != header->inode ||
+//				last_event.time != header->time ||
+//				last_event.time_ns != header->time_ns ||
+//				last_event.pid != header->pid
+//				) {
 				return 1;
-			}
+//			}
 		}
 	}
 	return 0;
 }
-
-#if STRINGIFY_EVENT
-int minimumStringLength(const void* event) {
-	const fs_event_header * header = (fs_event_header *) event;
-	// an additional 96 bytes is over-estimated, I think the exact number is 77
-	return header->path_len1 + header->path_len2 + 128;
-}
-#endif
-
-#if STRINGIFY_EVENT
-/*
- * Return -EINVAL if given str is too short.
- */
-int eventToString(const void* event, char *str, const size_t strlen) {
-	const fs_event_header * header = (fs_event_header *) event;
-	const size_t headerLen = sizeof(fs_event_header);
-	const char *old_name = event + headerLen;
-	const char *new_name =
-			(header->path_len2 > 0) ?
-					event + headerLen + header->path_len1 : NULL;
-
-	if (strlen < minimumStringLength(event)) {
-		return -EINVAL;
-	}
-
-	if (header->path_len2 > 0) {
-		sprintf(str,
-				"id %llu op %u ino %lu ts %lu ns %lu pid %u from %s to %s\n",
-				header->event_id, header->operation, header->inode, header->time,
-				header->time_ns, header->pid, old_name, new_name);
-	} else { // header->pathLen2 == 0
-		sprintf(str,
-				"id %llu op %u ino %lu ts %lu ns %lu pid %u name %s\n",
-				header->event_id, header->operation, header->inode, header->time,
-				header->time_ns, header->pid, old_name);
-	}
-	return 0;
-}
-#endif
 
 /* copied from fs/dcache.c */
 int prepend(char **buffer, int *buflen, const char *str, int namelen) {
@@ -210,6 +169,11 @@ out:
  * All operations have an oldName.
  * Only rename operations have a newName argument.
  *
+ * Golden rule: we only publish entire events.
+ * If the fifo is blocking and there is not enough space to publish a whole event at once,
+ * we wait and retry.
+ * If the fifo is not blocking and there is not enough space, the event is discarded.
+ *
  * return:
  *   0 if ok
  *   -EINVAL if dentry or dentry->inode is null
@@ -223,10 +187,7 @@ int send_event(struct super_block *sb, const fs_operation_type op, struct inode 
 	int fifo_block;
 	char *event = NULL;
 	int eventlen = 0;
-#if STRINGIFY_EVENT
-	int strlen = 0;
-	char *str = NULL;
-#endif
+	int sent = 0;
 
 	CHECK_NULL(sb, out);
 	spd = sb->s_fs_info;
@@ -238,47 +199,58 @@ int send_event(struct super_block *sb, const fs_operation_type op, struct inode 
 	CHECK_PTR(event, out);
 
 	if (should_send(sb, (fs_event_header *) event)) {
-		fifo_block = atomic_read(&spd->fifo_block);
-		if ((fifo_block == BLOCKING_FIFO) && kfifo_is_full(&(spd->fifo))) {
-			err = wait_event_interruptible(spd->writeable, !kfifo_is_full(&(spd->fifo)));
+retry:
+		fifo_block = atomic_read(&spd->notifier_info.fifo_block);
+
+		if ((fifo_block == BLOCKING_FIFO) && (kfifo_avail(&spd->notifier_info.fifo) < eventlen)) {
+			err = wait_event_interruptible(spd->notifier_info.writeable, (kfifo_avail(&spd->notifier_info.fifo) >= eventlen));
 			if (err) {
 				goto out_free_event;
 			}
 		}
 
-		spin_lock(&(spd->fifo_lock));
-
-		((fs_event_header *) event)->event_id = atomic64_inc_return(&spd->event_id);
-		memcpy(&spd->last_event, event, sizeof(fs_event_header));
-
-#if STRINGIFY_EVENT
-		strlen = minimumStringLength(event);
-		str = kzalloc(strlen, GFP_KERNEL);
-		CHECK_PTR(str, out_free_event);
-
-		err = eventToString(event, str, strlen);
-		if (err != 0) {
-			goto out_free_str;
+		spin_lock(&spd->notifier_info.fifo_lock);
+		/*
+		 * Recheck free space on the fifo.
+		 * Another producer might have used the space since the wait call.
+		 */
+		if (kfifo_avail(&spd->notifier_info.fifo) >= eventlen) {
+			((fs_event_header *) event)->event_id = atomic64_inc_return(&spd->notifier_info.event_id);
+			//memcpy(&spd->last_event, event, sizeof(fs_event_header));
+			sent = kfifo_in(&spd->notifier_info.fifo, event, eventlen);
+			BUG_ON(sent < eventlen);
+		} else if (fifo_block == BLOCKING_FIFO) {
+			// && (kfifo_avail(&spd->notifier_info.fifo) < eventlen)
+			/*
+			 * If there is not enough space, and the fifo is blocking,
+			 * unlock and try again.
+			 */
+			spin_unlock(&spd->notifier_info.fifo_lock);
+			goto retry;
+		} else {
+			// (fifo_block != BLOCKING_FIFO) && (kfifo_avail(&spd->notifier_info.fifo) < eventlen)
+			/*
+			 * We allocate an event_id so that consumers can detect that an event was discarded.
+			 */
+			((fs_event_header *) event)->event_id = atomic64_inc_return(&spd->notifier_info.event_id);
+			sent = -1;
 		}
-		kfifo_in(&(spd->fifo), str, strlen);
-#else
-		kfifo_in(&(spd->fifo), event, eventlen);
-#endif
+		spin_unlock(&spd->notifier_info.fifo_lock);
 
-		spin_unlock(&(spd->fifo_lock));
 #ifdef DEBUG
-		printk("send_event %d %d\n", strlen, kfifo_avail(&(spd->fifo)));
+		if (sent >= 0) {
+			printk("send_event %llu %u/%u %u\n", ((fs_event_header *) event)->event_id, sent, eventlen, kfifo_avail(&spd->notifier_info.fifo));
+		} else {
+			// sent < 0
+			printk("send_event discarded %llu %u %u\n", ((fs_event_header *) event)->event_id, eventlen, kfifo_avail(&spd->notifier_info.fifo));
+		}
 #endif
 
-		if ((fifo_block == BLOCKING_FIFO) && !kfifo_is_empty(&(spd->fifo))) {
-			wake_up_interruptible(&spd->readable);
+		if ((fifo_block == BLOCKING_FIFO) && !kfifo_is_empty(&spd->notifier_info.fifo)) {
+			wake_up_interruptible(&spd->notifier_info.readable);
 		}
 	}
 
-#if STRINGIFY_EVENT
-out_free_str:
-	kfree(str);
-#endif
 out_free_event:
 	destroy_notifyfs_event(event);
 out:
@@ -343,6 +315,30 @@ out:
 }
 
 /*
+ * Same as send_event(data, op, dentry, name, NULL);
+ *
+ * return:
+ *   0 if ok
+ *   -EINVAL if sb or sb->s_root is null
+ *   -ENOMEM if unable to allocate memory to string conversion
+ *   -ENAMETOOLONG from path to string conversion
+ */
+int send_mnt_event(struct super_block *sb, const fs_operation_type op) {
+	int err;
+
+	UDBG;
+	CHECK_NULL(sb, out);
+	CHECK_NULL(sb->s_root, out);
+
+	dget(sb->s_root);
+	err = send_event(sb, op, sb->s_root->d_inode, "/", NULL);
+	dput(sb->s_root);
+
+out:
+	return err;
+}
+
+/*
  * Same as send_dentry_event(data, opType, fileFrom->f_path.dentry);
  *
  * return:
@@ -369,11 +365,11 @@ void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_ty
 	int contains_pid;
 	*unlock = 0;
 
-	lock_mask = atomic_read(&spd->lock_mask);
+	lock_mask = atomic_read(&spd->notifier_info.lock_mask);
 	if (lock_mask & op) {
-		spin_lock(&spd->pids_lock);
-		contains_pid = int_list_contains(&spd->pids, pid);
-		spin_unlock(&spd->pids_lock);
+		spin_lock(&spd->notifier_info.pids_lock);
+		contains_pid = int_list_contains(&spd->notifier_info.pids, pid);
+		spin_unlock(&spd->notifier_info.pids_lock);
 
 		BUG_ON(contains_pid < 0);
 		/*
@@ -382,7 +378,7 @@ void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_ty
 		 */
 		if (!contains_pid) {
 			UDBG;
-			down_read(&spd->global_lock);
+			down_read(&spd->notifier_info.global_lock);
 			*unlock = 1;
 		}
 	}
@@ -392,7 +388,7 @@ void vfs_lock_release(struct super_block *sb, int *unlock) {
 	struct notifyfs_sb_info *spd = sb->s_fs_info;
 	if (*unlock) {
 		UDBG;
-		up_read(&spd->global_lock);
+		up_read(&spd->notifier_info.global_lock);
 		*unlock = 0;
 	}
 }
@@ -401,47 +397,47 @@ void replicator_lock_acquire(struct notifyfs_sb_info *spd) {
 	unsigned long flags;
 	int32_t activity;
 
-	spin_lock(&spd->global_write_spinlock);
+	spin_lock(&spd->notifier_info.global_write_spinlock);
 
-	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
-	activity = spd->global_lock.activity;
-	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+	raw_spin_lock_irqsave(&spd->notifier_info.global_lock.wait_lock, flags);
+	activity = spd->notifier_info.global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->notifier_info.global_lock.wait_lock, flags);
 
 	/* only acquire if not yet acquired for write */
 	if (activity >= 0) {
 		UDBG;
-		down_write(&spd->global_lock);
+		down_write(&spd->notifier_info.global_lock);
 	}
 
-	spin_unlock(&spd->global_write_spinlock);
+	spin_unlock(&spd->notifier_info.global_write_spinlock);
 }
 
 void replicator_lock_release(struct notifyfs_sb_info *spd) {
 	unsigned long flags;
 	int32_t activity;
 
-	spin_lock(&spd->global_write_spinlock);
+	spin_lock(&spd->notifier_info.global_write_spinlock);
 
-	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
-	activity = spd->global_lock.activity;
-	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+	raw_spin_lock_irqsave(&spd->notifier_info.global_lock.wait_lock, flags);
+	activity = spd->notifier_info.global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->notifier_info.global_lock.wait_lock, flags);
 
 	/* only release if acquired for write */
 	if (activity < 0) {
 		UDBG;
-		up_write(&spd->global_lock);
+		up_write(&spd->notifier_info.global_lock);
 	}
 
-	spin_unlock(&spd->global_write_spinlock);
+	spin_unlock(&spd->notifier_info.global_write_spinlock);
 }
 
 int32_t replicator_lock_status(struct notifyfs_sb_info *spd) {
 	unsigned long flags;
 	int32_t activity;
 
-	raw_spin_lock_irqsave(&spd->global_lock.wait_lock, flags);
-	activity = spd->global_lock.activity;
-	raw_spin_unlock_irqrestore(&spd->global_lock.wait_lock, flags);
+	raw_spin_lock_irqsave(&spd->notifier_info.global_lock.wait_lock, flags);
+	activity = spd->notifier_info.global_lock.activity;
+	raw_spin_unlock_irqrestore(&spd->notifier_info.global_lock.wait_lock, flags);
 
 	return activity != 0;
 }
@@ -528,26 +524,25 @@ static ssize_t proc_events_read(struct file *file, char *buf, size_t count,
 		err = -EINVAL;
 		goto out;
 	}
-	fifo_block = atomic_read(&spd->fifo_block);
-	if ((fifo_block == BLOCKING_FIFO) && kfifo_is_empty(&(spd->fifo))) {
-		err = wait_event_interruptible(spd->readable, !kfifo_is_empty(&(spd->fifo)));
+
+	fifo_block = atomic_read(&spd->notifier_info.fifo_block);
+	if ((fifo_block == BLOCKING_FIFO) && kfifo_is_empty(&spd->notifier_info.fifo)) {
+		err = wait_event_interruptible(spd->notifier_info.readable, !kfifo_is_empty(&spd->notifier_info.fifo));
 		if (err) {
 			goto out;
 		}
 	}
-	/* This mount is being shutdown. Return 0 to close the events proc file. */
-//	if (atomic_read(&spd->unmounting)) {
-//		return 0;
-//	}
-	spin_lock(&(spd->fifo_lock));
-	err = kfifo_to_user(&(spd->fifo), buf, count, &copied);
-	spin_unlock(&(spd->fifo_lock));
+
+	spin_lock(&spd->notifier_info.fifo_lock);
+	err = kfifo_to_user(&spd->notifier_info.fifo, buf, count, &copied);
+	spin_unlock(&spd->notifier_info.fifo_lock);
 
 #ifdef DEBUG
-	printk("proc_fifo_read %d %d\n", copied, kfifo_avail(&(spd->fifo)));
+	printk("proc_events_read %d %d\n", copied, kfifo_avail(&spd->notifier_info.fifo));
 #endif
-	if ((fifo_block == BLOCKING_FIFO) && !kfifo_is_full(&(spd->fifo))) {
-		wake_up_interruptible(&spd->writeable);
+
+	if ((fifo_block == BLOCKING_FIFO) && !kfifo_is_full(&spd->notifier_info.fifo)) {
+		wake_up_interruptible(&spd->notifier_info.writeable);
 	}
 	if (err) {
 		goto out;
@@ -569,10 +564,10 @@ static unsigned int proc_events_poll(struct file *file,
 		mask |= POLLERR;
 		goto out;
 	}
-	poll_wait(file, &spd->writeable, pt);
-	poll_wait(file, &spd->readable, pt);
+	poll_wait(file, &spd->notifier_info.writeable, pt);
+	poll_wait(file, &spd->notifier_info.readable, pt);
 
-	if (!kfifo_is_empty(&spd->fifo)) {
+	if (!kfifo_is_empty(&spd->notifier_info.fifo)) {
 		mask |= POLLIN | POLLRDNORM;
 	}
 //	if (!kfifo_is_full(&spd->fifo)) {
@@ -610,7 +605,7 @@ static ssize_t proc_event_mask_read(struct file *file, char *buf, size_t count,
 		err = 0;
 		goto out;
 	} else {
-		event_mask = atomic_read(&spd->event_mask);
+		event_mask = atomic_read(&spd->notifier_info.event_mask);
 		err = snprintf(buf, count, "%d\n", event_mask);
 		if (err >= count) {
 			/* not enough space in the buffer */
@@ -645,11 +640,11 @@ static ssize_t proc_event_mask_write(struct file *file, const char *buf, size_t 
 
 	err = kstrtoul(buf, 0, &event_mask);
 	if (err) {
-		pr_warn(NOTIFYFS_NAME ": unable to set event mask %s on mount %s\n", buf, spd->proc_dir->name);
+		pr_warn(NOTIFYFS_NAME ": unable to set event mask %s on mount %s\n", buf, spd->notifier_info.proc_dir->name);
 		goto out;
 	}
 
-	atomic_set(&spd->event_mask, event_mask);
+	atomic_set(&spd->notifier_info.event_mask, event_mask);
 	err = count; /* consider all data written */
 
 out:
@@ -719,7 +714,7 @@ static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t
 
 	err = kstrtoul(buf, 0, &lock_value);
 	if (err) {
-		pr_warn(NOTIFYFS_NAME ": unable to parse lock status %s on mount %s\n", buf, spd->proc_dir->name);
+		pr_warn(NOTIFYFS_NAME ": unable to parse lock status %s on mount %s\n", buf, spd->notifier_info.proc_dir->name);
 		goto out;
 	}
 
@@ -762,7 +757,7 @@ static ssize_t proc_lock_mask_read(struct file *file, char *buf, size_t count,
 		err = 0;
 		goto out;
 	} else {
-		lock_mask = atomic_read(&spd->lock_mask);
+		lock_mask = atomic_read(&spd->notifier_info.lock_mask);
 		err = snprintf(buf, count, "%d\n", lock_mask);
 		if (err >= count) {
 			/* not enough space in the buffer */
@@ -797,11 +792,11 @@ static ssize_t proc_lock_mask_write(struct file *file, const char *buf, size_t c
 
 	err = kstrtoul(buf, 0, &lock_mask);
 	if (err) {
-		pr_warn(NOTIFYFS_NAME ": unable to set lock mask %s on mount %s\n", buf, spd->proc_dir->name);
+		pr_warn(NOTIFYFS_NAME ": unable to set lock mask %s on mount %s\n", buf, spd->notifier_info.proc_dir->name);
 		goto out;
 	}
 
-	atomic_set(&spd->lock_mask, lock_mask);
+	atomic_set(&spd->notifier_info.lock_mask, lock_mask);
 	err = count; /* consider all data written */
 
 out:
@@ -836,7 +831,7 @@ static ssize_t proc_fifo_block_read(struct file *file, char *buf, size_t count,
 		err = 0;
 		goto out;
 	} else {
-		fifo_block = atomic_read(&spd->fifo_block);
+		fifo_block = atomic_read(&spd->notifier_info.fifo_block);
 		err = snprintf(buf, count, "%d\n", fifo_block);
 		if (err >= count) {
 			/* not enough space in the buffer */
@@ -871,11 +866,17 @@ static ssize_t proc_fifo_block_write(struct file *file, const char *buf, size_t 
 
 	err = kstrtoul(buf, 0, &fifo_block);
 	if (err) {
-		pr_warn(NOTIFYFS_NAME ": unable to set fifo_block %s on mount %s\n", buf, spd->proc_dir->name);
+		pr_warn(NOTIFYFS_NAME ": unable to set fifo_block %s on mount %s\n", buf, spd->notifier_info.proc_dir->name);
 		goto out;
 	}
 
-	atomic_set(&spd->fifo_block, (fifo_block != 0) ? BLOCKING_FIFO : NONBLOCKING_FIFO);
+	atomic_set(&spd->notifier_info.fifo_block, (fifo_block != 0) ? BLOCKING_FIFO : NONBLOCKING_FIFO);
+	/*
+	 * Changing to non-blocking wakes up all producers waiting.
+	 */
+	if (atomic_read(&spd->notifier_info.fifo_block)) {
+		wake_up_interruptible_all(&spd->notifier_info.writeable);
+	}
 	err = count; /* consider all data written */
 
 out:
@@ -909,7 +910,7 @@ static ssize_t proc_fifo_size_read(struct file *file, char *buf, size_t count,
 		err = 0;
 		goto out;
 	} else {
-		err = snprintf(buf, count, "%d\n", kfifo_size(&spd->fifo));
+		err = snprintf(buf, count, "%d\n", kfifo_size(&spd->notifier_info.fifo));
 		if (err >= count) {
 			/* not enough space in the buffer */
 			err = -EINVAL;
@@ -950,9 +951,9 @@ static ssize_t proc_pid_blacklist_read(struct file *file, char *buf, size_t coun
 		err = 0;
 		goto out;
 	} else {
-		spin_lock(&(spd->pids_lock));
-		err = int_list_count(&spd->pids, &pid_count);
-		spin_unlock(&(spd->pids_lock));
+		spin_lock(&spd->notifier_info.pids_lock);
+		err = int_list_count(&spd->notifier_info.pids, &pid_count);
+		spin_unlock(&spd->notifier_info.pids_lock);
 		if (err) {
 			goto out;
 		}
@@ -996,30 +997,30 @@ static ssize_t proc_pid_blacklist_write(struct file *file, const char *buf, size
 		}
 		err = kstrtol(token, 0, &pid);
 		if (err) {
-			pr_warn(NOTIFYFS_NAME ": unable to parse pid list %s on mount %s\n", buf, spd->proc_dir->name);
+			pr_warn(NOTIFYFS_NAME ": unable to parse pid list %s on mount %s\n", buf, spd->notifier_info.proc_dir->name);
 			goto out;
 		}
 		if (pid == 0) {
-			spin_lock(&(spd->pids_lock));
-			err = int_list_clear(&spd->pids);
-			spin_unlock(&(spd->pids_lock));
+			spin_lock(&spd->notifier_info.pids_lock);
+			err = int_list_clear(&spd->notifier_info.pids);
+			spin_unlock(&spd->notifier_info.pids_lock);
 			if (err) {
 				goto out;
 			}
 		} else if (pid < 0) {
-			spin_lock(&(spd->pids_lock));
-			int_list_remove(&spd->pids, -pid);
-			spin_unlock(&(spd->pids_lock));
+			spin_lock(&spd->notifier_info.pids_lock);
+			int_list_remove(&spd->notifier_info.pids, -pid);
+			spin_unlock(&spd->notifier_info.pids_lock);
 			if (err) {
 				goto out;
 			}
 		} else {
-			spin_lock(&(spd->pids_lock));
-			err = int_list_add(&spd->pids, pid);
+			spin_lock(&spd->notifier_info.pids_lock);
+			err = int_list_add(&spd->notifier_info.pids, pid);
 			if (!err) {
-				err = int_list_sort(&spd->pids);
+				err = int_list_sort(&spd->notifier_info.pids);
 			}
-			spin_unlock(&(spd->pids_lock));
+			spin_unlock(&spd->notifier_info.pids_lock);
 			if (err) {
 				goto out;
 			}

@@ -31,6 +31,7 @@ static int notifyfs_d_revalidate(struct dentry *dentry, struct nameidata *nd) {
 	if (!lower_dentry->d_op || !lower_dentry->d_op->d_revalidate) {
 		goto out;
 	}
+	UDBG;
 	pathcpy(&saved_path, &nd->path);
 	pathcpy(&nd->path, &lower_path);
 	err = lower_dentry->d_op->d_revalidate(lower_dentry, nd);
@@ -41,6 +42,7 @@ out:
 }
 
 static void notifyfs_d_release(struct dentry *dentry) {
+	UDBG;
 	/* release and reset the lower paths */
 	notifyfs_put_reset_lower_path(dentry);
 	free_dentry_private_data(dentry);

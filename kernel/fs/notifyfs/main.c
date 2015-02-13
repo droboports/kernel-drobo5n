@@ -52,6 +52,7 @@ static int parse_options(char *options, struct notifyfs_mount_options *opts) {
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
 	int option;
+	int min_fifo_size = MAX_EVENT_SIZE;
 
 	UDBG;
 	if (!options) {
@@ -89,6 +90,9 @@ static int parse_options(char *options, struct notifyfs_mount_options *opts) {
 				err = match_int(&args[0], &option);
 				if (err != 0) {
 					return err;
+				}
+				if (option < min_fifo_size) {
+					return -EINVAL;
 				}
 				UDBG;
 				opts->fifo_size = option;

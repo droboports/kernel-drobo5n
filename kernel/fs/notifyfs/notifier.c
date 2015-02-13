@@ -194,7 +194,7 @@ int send_event(struct super_block *sb, const fs_operation_type op, struct inode 
 	CHECK_NULL(spd, out);
 	CHECK_NULL(inode, out);
 
-	event = create_notifyfs_event(current->pid, op, inode->i_ino,
+	event = create_notifyfs_event(current->tgid, op, inode->i_ino,
 			inode->i_mtime, old_name, new_name, &eventlen);
 	CHECK_PTR(event, out);
 

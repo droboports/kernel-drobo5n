@@ -412,13 +412,14 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	// the names get overwritten.
 	oldNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
 	CHECK_PTR(oldNameBuffer, out_err);
-	oldName = dentry_path_raw(lower_old_dentry, oldNameBuffer, MAX_PATH_LENGTH);
-	// Can only be -ENAMETOOLONG
+	oldName = dentry_to_string(old_dentry->d_sb, lower_old_dentry, oldNameBuffer, MAX_PATH_LENGTH);
+	// Error can only be -ENAMETOOLONG
 	CHECK_PTR(oldName, out_free_old_name);
+
 	newNameBuffer = kzalloc(MAX_PATH_LENGTH, GFP_KERNEL);
 	CHECK_PTR(newNameBuffer, out_free_old_name);
-	newName = dentry_path_raw(lower_new_dentry, newNameBuffer, MAX_PATH_LENGTH);
-	// Can only be -ENAMETOOLONG
+	newName = dentry_to_string(new_dentry->d_sb, lower_new_dentry, newNameBuffer, MAX_PATH_LENGTH);
+	// Error can only be -ENAMETOOLONG
 	CHECK_PTR(oldName, out_free_new_name);
 	/* end notifier support */
 

@@ -76,6 +76,8 @@ struct notifier_info {
 	spinlock_t global_write_spinlock;
 };
 
+char *dentry_to_string(struct super_block *sb, struct dentry *dentry, char *buf, int buflen);
+
 int send_file_event(struct super_block *sb, const fs_operation_type op, const struct file *file);
 
 int send_dentry_event(struct super_block *sb, const fs_operation_type op, struct dentry *dentry);

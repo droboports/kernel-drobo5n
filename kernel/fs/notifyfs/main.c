@@ -364,7 +364,7 @@ static int __init init_notifyfs(void) {
 		goto out_unregister_fs;
 	}
 	/* end notifier support */
-	pr_info(NOTIFYFS_NAME " loaded\n");
+	pr_info(NOTIFYFS_NAME " loaded with sizeof(ino_t)=%u.\n", sizeof(ino_t));
 	goto out;
 
 out_unregister_fs:

@@ -554,6 +554,55 @@ out:
 	return err;
 }
 
+/*
+ * Returns
+ *   0 on success
+ *   -ERANGE on overflow
+ *   -EINVAL on parsing error
+ */
+static ssize_t proc_events_write(struct file *file, const char *buf, size_t count,
+		loff_t *offp) {
+	int err;
+	struct notifyfs_sb_info *spd;
+	const char *buffer = buf;
+	char *token;
+	long int code;
+
+	spd = PDE(file->f_path.dentry->d_inode)->data;
+	if (spd == NULL) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	while ((token = strsep((char **) &buffer, " ")) != NULL) {
+		if (!*token) {
+			continue;
+		}
+		err = kstrtol(token, 0, &code);
+		if (err) {
+			pr_warn(NOTIFYFS_NAME ": unable to parse value %s written to events on mount %s\n", buf, spd->notifier_info.proc_dir->name);
+			goto out;
+		}
+		if (code == 0) {
+			spin_lock(&spd->notifier_info.fifo_lock);
+			kfifo_reset(&spd->notifier_info.fifo);
+			spin_unlock(&spd->notifier_info.fifo_lock);
+
+			if ((atomic_read(&spd->notifier_info.fifo_block) == BLOCKING_FIFO)
+					&& !kfifo_is_full(&spd->notifier_info.fifo)) {
+				wake_up_interruptible(&spd->notifier_info.writeable);
+			}
+		} else {
+			err = -EINVAL;
+			goto out;
+		}
+	}
+	err = count; /* consider all data written */
+
+out:
+	return err;
+}
+
 static unsigned int proc_events_poll(struct file *file,
 		struct poll_table_struct *pt) {
 	struct notifyfs_sb_info *spd;
@@ -579,6 +628,7 @@ out:
 
 static const struct file_operations proc_events_fops = {
 	.read = proc_events_read,
+	.write = proc_events_write,
 	.poll = proc_events_poll
 };
 

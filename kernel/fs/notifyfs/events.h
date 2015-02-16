@@ -9,6 +9,8 @@
 #ifndef KERNEL_FS_NOTIFYFS_EVENTS_H_
 #define KERNEL_FS_NOTIFYFS_EVENTS_H_
 
+typedef uint64_t ino64_t;
+
 /*
  * fs_event is a buffer containing:
  * - offset 0:                                struct fs_event_header
@@ -20,7 +22,7 @@
 typedef struct fs_event_header {
 	uint64_t event_id;   /* event id, a monotonically increasing counter */
 	uint32_t operation;  /* see FsOperationType */
-	ino_t    inode;      /* inode affected */
+	ino64_t  inode;      /* inode affected -- forced to 64 bit for better portability */
 	time_t   mtime;      /* see timespec.tv_sec */
 	long     mtime_ns;   /* see timespec.tv_nsec */
 	pid_t    pid;        /* PID that caused the event */

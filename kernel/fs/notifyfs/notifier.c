@@ -393,9 +393,10 @@ void vfs_lock_release(struct super_block *sb, int *unlock) {
 	}
 }
 
-void replicator_lock_acquire(struct notifyfs_sb_info *spd) {
-	unsigned long flags;
+int replicator_lock_acquire(struct notifyfs_sb_info *spd, const int trylock) {
+	unsigned long flags = 0;
 	int32_t activity;
+	int ret = 1;
 
 	spin_lock(&spd->notifier_info.global_write_spinlock);
 
@@ -405,15 +406,22 @@ void replicator_lock_acquire(struct notifyfs_sb_info *spd) {
 
 	/* only acquire if not yet acquired for write */
 	if (activity >= 0) {
-		UDBG;
-		down_write(&spd->notifier_info.global_lock);
+		if (trylock) {
+			UDBG;
+			ret = down_write_trylock(&spd->notifier_info.global_lock);
+		} else {
+			UDBG;
+			down_write(&spd->notifier_info.global_lock);
+		}
 	}
 
 	spin_unlock(&spd->notifier_info.global_write_spinlock);
+
+	return ret;
 }
 
 void replicator_lock_release(struct notifyfs_sb_info *spd) {
-	unsigned long flags;
+	unsigned long flags = 0;
 	int32_t activity;
 
 	spin_lock(&spd->notifier_info.global_write_spinlock);
@@ -431,15 +439,21 @@ void replicator_lock_release(struct notifyfs_sb_info *spd) {
 	spin_unlock(&spd->notifier_info.global_write_spinlock);
 }
 
-int32_t replicator_lock_status(struct notifyfs_sb_info *spd) {
-	unsigned long flags;
+int replicator_lock_status(struct notifyfs_sb_info *spd) {
+	unsigned long flags = 0;
 	int32_t activity;
 
 	raw_spin_lock_irqsave(&spd->notifier_info.global_lock.wait_lock, flags);
 	activity = spd->notifier_info.global_lock.activity;
 	raw_spin_unlock_irqrestore(&spd->notifier_info.global_lock.wait_lock, flags);
 
-	return activity != 0;
+	if (activity < 0) {
+		return 0x01;
+	} else if (activity > 0) {
+		return 0x80;
+	}
+	// activity == 0
+	return 0;
 }
 
 /*
@@ -749,12 +763,15 @@ out:
  *   0 on success
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
+ *   -EAGAIN if the lock_value != 0 && lock_value != 1,
+ *           and the lock cannot be acquired.
  */
 static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t count,
 		loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	unsigned long int lock_value;
+	int acquired;
 
 	spd = PDE(file->f_path.dentry->d_inode)->data;
 	if (spd == NULL) {
@@ -769,7 +786,10 @@ static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t
 	}
 
 	if (lock_value) {
-		replicator_lock_acquire(spd);
+		acquired = replicator_lock_acquire(spd, lock_value != 1);
+		if (!acquired) {
+			err = -EAGAIN;
+		}
 	} else {
 		replicator_lock_release(spd);
 	}

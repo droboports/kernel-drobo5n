@@ -360,7 +360,6 @@ out:
 
 void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_type op) {
 	struct notifyfs_sb_info *spd = sb->s_fs_info;
-	pid_t pid = current->pid;
 	u32 lock_mask;
 	int contains_pid;
 	*unlock = 0;
@@ -368,7 +367,7 @@ void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_ty
 	lock_mask = atomic_read(&spd->notifier_info.lock_mask);
 	if (lock_mask & op) {
 		spin_lock(&spd->notifier_info.pids_lock);
-		contains_pid = int_list_contains(&spd->notifier_info.pids, pid);
+		contains_pid = int_list_contains(&spd->notifier_info.pids, current->tgid);
 		spin_unlock(&spd->notifier_info.pids_lock);
 
 		BUG_ON(contains_pid < 0);
@@ -1009,6 +1008,11 @@ static ssize_t proc_pid_blacklist_read(struct file *file, char *buf, size_t coun
 	int err;
 	struct notifyfs_sb_info *spd;
 	int pid_count = 0;
+	char *b;
+	int c;
+	int i;
+	int n = 0;
+	int pid;
 
 	spd = PDE(file->f_path.dentry->d_inode)->data;
 	if (spd == NULL) {
@@ -1020,23 +1024,39 @@ static ssize_t proc_pid_blacklist_read(struct file *file, char *buf, size_t coun
 		/* read complete */
 		err = 0;
 		goto out;
-	} else {
-		spin_lock(&spd->notifier_info.pids_lock);
-		err = int_list_count(&spd->notifier_info.pids, &pid_count);
-		spin_unlock(&spd->notifier_info.pids_lock);
-		if (err) {
-			goto out;
-		}
-		err = snprintf(buf, count, "%d\n", pid_count);
-		if (err >= count) {
-			/* not enough space in the buffer */
-			err = -EINVAL;
-			goto out;
-		}
-		err++; /* include the null terminator */
-		*offp = err;
 	}
 
+	spin_lock(&spd->notifier_info.pids_lock);
+	err = int_list_count(&spd->notifier_info.pids, &pid_count);
+	if (err) {
+		goto out_unlock;
+	}
+	b = buf;
+	c = count;
+	for (i = 0; i < pid_count; i++) {
+		err = int_list_get(&spd->notifier_info.pids, i, &pid);
+		if (err) {
+			goto out_unlock;
+		}
+		err = snprintf(b, c, "%d ", pid);
+		if (err >= c) {
+			/* not enough space in the buffer */
+			err = -EINVAL;
+			goto out_terminate;
+		}
+		b += err;
+		c -= err;
+		n += err;
+	}
+
+out_terminate:
+	/* include the null terminator */
+	*b = '\0';
+	n++;
+	err = n;
+	*offp = n;
+out_unlock:
+	spin_unlock(&spd->notifier_info.pids_lock);
 out:
 	return err;
 }

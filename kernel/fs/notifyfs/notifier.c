@@ -16,6 +16,8 @@
 
 /* directory containing all proc files */
 static struct proc_dir_entry *proc_folder;
+static struct proc_dir_entry *proc_api_version;
+static struct proc_dir_entry *proc_module_version;
 
 /*
  * All operations have an oldName.
@@ -455,6 +457,72 @@ int replicator_lock_status(struct notifyfs_sb_info *spd) {
 	return 0;
 }
 
+/***** api version file *****/
+
+static ssize_t proc_api_version_read(struct file *file, char *buf, size_t count, loff_t *offp) {
+	int err;
+
+	if (*offp > 0) {
+		/* read complete */
+		err = 0;
+		goto out;
+	} else {
+		err = snprintf(buf, count, "%d\n", NOTIFYFS_API_VERSION);
+		if (err >= count) {
+			/* not enough space in the buffer */
+			err = -EINVAL;
+			goto out;
+		}
+		err++; /* include the null terminator */
+		*offp = err;
+	}
+
+out:
+	return err;
+}
+
+static const struct file_operations proc_api_version_fops = {
+	.read = proc_api_version_read
+};
+
+struct proc_dir_entry *create_api_version_file(void *data, struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_API_VERSION_FILE, 0444, dir, &proc_api_version_fops, data);
+}
+
+/***** module version file *****/
+
+static ssize_t proc_module_version_read(struct file *file, char *buf, size_t count, loff_t *offp) {
+	int err;
+
+	if (*offp > 0) {
+		/* read complete */
+		err = 0;
+		goto out;
+	} else {
+		err = snprintf(buf, count, "%s\n", NOTIFYFS_VERSION);
+		if (err >= count) {
+			/* not enough space in the buffer */
+			err = -EINVAL;
+			goto out;
+		}
+		err++; /* include the null terminator */
+		*offp = err;
+	}
+
+out:
+	return err;
+}
+
+static const struct file_operations proc_module_version_fops = {
+	.read = proc_module_version_read
+};
+
+struct proc_dir_entry *create_module_version_file(void *data, struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_MODULE_VERSION_FILE, 0444, dir, &proc_module_version_fops, data);
+}
+
+/***** main proc folder *****/
+
 /*
  * Create the /proc folder.
  *
@@ -463,19 +531,42 @@ int replicator_lock_status(struct notifyfs_sb_info *spd) {
  *   -ENOMEM if unable to create folder
  */
 int create_proc_dir(void) {
+	int err = 0;
 	proc_folder = proc_mkdir(NOTIFYFS_NAME, NULL);
 	if (proc_folder == NULL) {
 		pr_warn(NOTIFYFS_NAME ": Unable to create proc directory\n");
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto out;
 	}
-	return 0;
+	proc_api_version = create_api_version_file(NULL, proc_folder);
+	if (proc_api_version == NULL) {
+		pr_warn(NOTIFYFS_NAME ": Unable to create api version file\n");
+		err = -ENOMEM;
+		goto out_rmdir;
+	}
+	proc_module_version = create_module_version_file(NULL, proc_folder);
+	if (proc_module_version == NULL) {
+		pr_warn(NOTIFYFS_NAME ": Unable to create module version file\n");
+		err = -ENOMEM;
+		goto out_rmapi;
+	}
+	goto out;
+
+out_rmapi:
+	remove_proc_entry(proc_api_version->name, proc_folder);
+out_rmdir:
+	remove_proc_entry(NOTIFYFS_NAME, NULL);
+out:
+	return err;
 }
 
 void destroy_proc_dir(void) {
 	/*
 	 * We can only unload the module if all mounts were removed,
-	 * so there should be no files left inside the folder.
+	 * so there should be no children left inside the folder.
 	 */
+	remove_proc_entry(proc_module_version->name, proc_folder);
+	remove_proc_entry(proc_api_version->name, proc_folder);
 	remove_proc_entry(NOTIFYFS_NAME, NULL);
 }
 
@@ -525,8 +616,7 @@ void destroy_proc_mount_dir(struct proc_dir_entry *dir) {
 
 /***** events file *****/
 
-static ssize_t proc_events_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_events_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int fifo_block;
@@ -573,8 +663,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_events_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_events_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	const char *buffer = buf;
@@ -616,8 +705,7 @@ out:
 	return err;
 }
 
-static unsigned int proc_events_poll(struct file *file,
-		struct poll_table_struct *pt) {
+static unsigned int proc_events_poll(struct file *file, struct poll_table_struct *pt) {
 	struct notifyfs_sb_info *spd;
 	unsigned int mask = 0;
 
@@ -651,8 +739,7 @@ struct proc_dir_entry *create_events_file(void *data, struct proc_dir_entry *dir
 
 /***** event mask file *****/
 
-static ssize_t proc_event_mask_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_event_mask_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int event_mask;
@@ -689,8 +776,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_event_mask_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_event_mask_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	unsigned long int event_mask;
@@ -725,8 +811,7 @@ struct proc_dir_entry *create_event_mask_file(void *data, struct proc_dir_entry 
 
 /***** global lock file *****/
 
-static ssize_t proc_global_lock_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_global_lock_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int32_t lock_status;
@@ -765,8 +850,7 @@ out:
  *   -EAGAIN if the lock_value != 0 && lock_value != 1,
  *           and the lock cannot be acquired.
  */
-static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_global_lock_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	unsigned long int lock_value;
@@ -809,8 +893,7 @@ struct proc_dir_entry *create_global_lock_file(void *data, struct proc_dir_entry
 
 /***** lock mask file *****/
 
-static ssize_t proc_lock_mask_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_lock_mask_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int lock_mask;
@@ -847,8 +930,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_lock_mask_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_lock_mask_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	unsigned long int lock_mask;
@@ -883,8 +965,7 @@ struct proc_dir_entry *create_lock_mask_file(void *data, struct proc_dir_entry *
 
 /***** fifo block file *****/
 
-static ssize_t proc_fifo_block_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_fifo_block_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int fifo_block;
@@ -921,8 +1002,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_fifo_block_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_fifo_block_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	unsigned long int fifo_block;
@@ -963,8 +1043,7 @@ struct proc_dir_entry *create_fifo_block_file(void *data, struct proc_dir_entry 
 
 /***** fifo size file *****/
 
-static ssize_t proc_fifo_size_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_fifo_size_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 
@@ -1003,8 +1082,7 @@ struct proc_dir_entry *create_fifo_size_file(void *data, struct proc_dir_entry *
 
 /***** pid blacklist file *****/
 
-static ssize_t proc_pid_blacklist_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_pid_blacklist_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	int pid_count = 0;
@@ -1067,8 +1145,7 @@ out:
  *   -ERANGE on overflow
  *   -EINVAL on parsing error
  */
-static ssize_t proc_pid_blacklist_write(struct file *file, const char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_pid_blacklist_write(struct file *file, const char *buf, size_t count, loff_t *offp) {
 	int err;
 	struct notifyfs_sb_info *spd;
 	const char *buffer = buf;
@@ -1133,8 +1210,7 @@ struct proc_dir_entry *create_pid_blacklist_file(void *data, struct proc_dir_ent
 
 /***** source directory file *****/
 
-static ssize_t proc_src_dir_read(struct file *file, char *buf, size_t count,
-		loff_t *offp) {
+static ssize_t proc_src_dir_read(struct file *file, char *buf, size_t count, loff_t *offp) {
 	int err = 0;
 	struct super_block *sb;
 	char *buffer;

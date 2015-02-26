@@ -9,7 +9,19 @@
 #ifndef KERNEL_FS_NOTIFYFS_EVENTS_H_
 #define KERNEL_FS_NOTIFYFS_EVENTS_H_
 
+#ifndef __KERNEL__
+#include <stdint.h>    // uint
+#include <sys/types.h> // ino_t
+#include <unistd.h>    // size_t
+#endif
+
 typedef uint64_t ino64_t;
+
+/*
+ * Version of the interface between
+ * kernel and user land.
+ */
+#define NOTIFYFS_API_VERSION 1
 
 /*
  * fs_event is a buffer containing:

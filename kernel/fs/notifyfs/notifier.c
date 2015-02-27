@@ -18,6 +18,7 @@
 static struct proc_dir_entry *proc_folder;
 static struct proc_dir_entry *proc_api_version;
 static struct proc_dir_entry *proc_module_version;
+static struct proc_dir_entry *proc_mounts_folder;
 
 /*
  * All operations have an oldName.
@@ -485,8 +486,8 @@ static const struct file_operations proc_api_version_fops = {
 	.read = proc_api_version_read
 };
 
-struct proc_dir_entry *create_api_version_file(void *data, struct proc_dir_entry *dir) {
-	return proc_create_data(PROC_API_VERSION_FILE, 0444, dir, &proc_api_version_fops, data);
+struct proc_dir_entry *create_api_version_file(struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_API_VERSION_FILE, 0444, dir, &proc_api_version_fops, NULL);
 }
 
 /***** module version file *****/
@@ -517,8 +518,8 @@ static const struct file_operations proc_module_version_fops = {
 	.read = proc_module_version_read
 };
 
-struct proc_dir_entry *create_module_version_file(void *data, struct proc_dir_entry *dir) {
-	return proc_create_data(PROC_MODULE_VERSION_FILE, 0444, dir, &proc_module_version_fops, data);
+struct proc_dir_entry *create_module_version_file(struct proc_dir_entry *dir) {
+	return proc_create_data(PROC_MODULE_VERSION_FILE, 0444, dir, &proc_module_version_fops, NULL);
 }
 
 /***** main proc folder *****/
@@ -538,20 +539,28 @@ int create_proc_dir(void) {
 		err = -ENOMEM;
 		goto out;
 	}
-	proc_api_version = create_api_version_file(NULL, proc_folder);
+	proc_api_version = create_api_version_file(proc_folder);
 	if (proc_api_version == NULL) {
 		pr_warn(NOTIFYFS_NAME ": Unable to create api version file\n");
 		err = -ENOMEM;
 		goto out_rmdir;
 	}
-	proc_module_version = create_module_version_file(NULL, proc_folder);
+	proc_module_version = create_module_version_file(proc_folder);
 	if (proc_module_version == NULL) {
 		pr_warn(NOTIFYFS_NAME ": Unable to create module version file\n");
 		err = -ENOMEM;
 		goto out_rmapi;
 	}
+	proc_mounts_folder = proc_mkdir(PROC_MOUNTS_FOLDER, proc_folder);
+	if (proc_mounts_folder == NULL) {
+		pr_warn(NOTIFYFS_NAME ": Unable to create mounts proc directory\n");
+		err = -ENOMEM;
+		goto out_rmversion;
+	}
 	goto out;
 
+out_rmversion:
+	remove_proc_entry(proc_module_version->name, proc_folder);
 out_rmapi:
 	remove_proc_entry(proc_api_version->name, proc_folder);
 out_rmdir:
@@ -565,6 +574,7 @@ void destroy_proc_dir(void) {
 	 * We can only unload the module if all mounts were removed,
 	 * so there should be no children left inside the folder.
 	 */
+	remove_proc_entry(proc_mounts_folder->name, proc_folder);
 	remove_proc_entry(proc_module_version->name, proc_folder);
 	remove_proc_entry(proc_api_version->name, proc_folder);
 	remove_proc_entry(NOTIFYFS_NAME, NULL);
@@ -596,7 +606,7 @@ struct proc_dir_entry *create_proc_mount_dir(ino_t inode) {
 		goto out_free;
 	}
 
-	dir = proc_mkdir(name, proc_folder);
+	dir = proc_mkdir(name, proc_mounts_folder);
 	if (IS_ERR_OR_NULL(name)) {
 		pr_err(NOTIFYFS_NAME ": Unable to create mount proc directory (mount directory creation failed)\n");
 		err = !dir ? -ENOMEM : PTR_ERR(dir);
@@ -611,7 +621,7 @@ out:
 }
 
 void destroy_proc_mount_dir(struct proc_dir_entry *dir) {
-	remove_proc_entry(dir->name, proc_folder);
+	remove_proc_entry(dir->name, proc_mounts_folder);
 }
 
 /***** events file *****/

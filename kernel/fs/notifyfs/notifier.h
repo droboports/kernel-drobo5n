@@ -20,6 +20,7 @@
 
 #define PROC_API_VERSION_FILE "api"
 #define PROC_MODULE_VERSION_FILE "version"
+#define PROC_MOUNTS_FOLDER "mounts"
 
 #define PROC_SRC_DIR_FILE "source"
 #define PROC_EVENTS_FILE "events"

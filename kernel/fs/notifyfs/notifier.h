@@ -94,6 +94,8 @@ void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_ty
 
 void vfs_lock_release(struct super_block *sb, int *unlock);
 
+int is_pid_blacklisted(struct super_block *sb, pid_t pid);
+
 int create_proc_dir(void);
 
 void destroy_proc_dir(void);

@@ -64,28 +64,11 @@ void destroy_notifyfs_event(void *buffer) {
  */
 int should_send(struct super_block *sb, fs_event_header *header) {
 	struct notifyfs_sb_info *spd = sb->s_fs_info;
-//	struct fs_event_header last_event = spd->last_event;
 	u32 event_mask;
-	int contains_pid;
 
 	event_mask = atomic_read(&spd->notifier_info.event_mask);
-	if (event_mask & header->operation) {
-		spin_lock(&spd->notifier_info.pids_lock);
-		contains_pid = int_list_contains(&spd->notifier_info.pids, header->pid);
-		spin_unlock(&spd->notifier_info.pids_lock);
-		/* contains_pid could be greater than zero if found,
-		 * or less than zero if error */
-		if (!contains_pid) {
-//			if (
-//				last_event.operation != header->operation ||
-//				last_event.inode != header->inode ||
-//				last_event.time != header->time ||
-//				last_event.time_ns != header->time_ns ||
-//				last_event.pid != header->pid
-//				) {
-				return 1;
-//			}
-		}
+	if ((event_mask & header->operation) && !is_pid_blacklisted(sb, header->pid)) {
+		return 1;
 	}
 	return 0;
 }
@@ -364,25 +347,13 @@ out:
 void vfs_lock_acquire(struct super_block *sb, int *unlock, const fs_operation_type op) {
 	struct notifyfs_sb_info *spd = sb->s_fs_info;
 	u32 lock_mask;
-	int contains_pid;
 	*unlock = 0;
 
 	lock_mask = atomic_read(&spd->notifier_info.lock_mask);
-	if (lock_mask & op) {
-		spin_lock(&spd->notifier_info.pids_lock);
-		contains_pid = int_list_contains(&spd->notifier_info.pids, current->tgid);
-		spin_unlock(&spd->notifier_info.pids_lock);
-
-		BUG_ON(contains_pid < 0);
-		/*
-		 * If the current PID is on the blacklist,
-		 * then no locking is necessary
-		 */
-		if (!contains_pid) {
-			UDBG;
-			down_read(&spd->notifier_info.global_lock);
-			*unlock = 1;
-		}
+	if ((lock_mask & op) && ! is_pid_blacklisted(sb, current->tgid)) {
+		UDBG;
+		down_read(&spd->notifier_info.global_lock);
+		*unlock = 1;
 	}
 }
 
@@ -456,6 +427,19 @@ int replicator_lock_status(struct notifyfs_sb_info *spd) {
 	}
 	// activity == 0
 	return 0;
+}
+
+/*
+ * return: 1 if should send the event, 0 otherwise
+ */
+int is_pid_blacklisted(struct super_block *sb, pid_t pid) {
+	int contains_pid;
+	struct notifyfs_sb_info *spd = sb->s_fs_info;
+	spin_lock(&spd->notifier_info.pids_lock);
+	contains_pid = int_list_contains(&spd->notifier_info.pids, pid);
+	spin_unlock(&spd->notifier_info.pids_lock);
+	BUG_ON(contains_pid < 0);
+	return contains_pid;
 }
 
 /***** api version file *****/

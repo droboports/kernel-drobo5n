@@ -125,6 +125,11 @@ static int notifyfs_unlink(struct inode *dir, struct dentry *dentry) {
 	struct dentry *lower_dir_dentry;
 	struct path lower_path;
 
+	/* Non-blacklisted PIDs cannot remove symlinks. */
+	if (S_ISLNK(dentry->d_inode->i_mode) && ! is_pid_blacklisted(dentry->d_sb, current->tgid)) {
+		return -EPERM;
+	}
+
 	vfs_lock_acquire(dentry->d_sb, &unlock, FS_FILE_DELETE);
 
 	notifyfs_get_lower_path(dentry, &lower_path);
@@ -180,6 +185,11 @@ static int notifyfs_symlink(struct inode *dir, struct dentry *dentry,
 	struct dentry *lower_dentry;
 	struct dentry *lower_parent_dentry = NULL;
 	struct path lower_path;
+
+	/* Non-blacklisted PIDs cannot create symlinks. */
+	if (! is_pid_blacklisted(dentry->d_sb, current->tgid)) {
+		return -EPERM;
+	}
 
 	vfs_lock_acquire(dentry->d_sb, &unlock, FS_FILE_CREATE);
 
@@ -376,6 +386,11 @@ static int notifyfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	char *newNameBuffer = NULL;
 	char *newName;
 	/* end notifier support */
+
+	/* Non-blacklisted PIDs cannot rename or move symlinks. */
+	if (S_ISLNK(old_dentry->d_inode->i_mode) && ! is_pid_blacklisted(old_dentry->d_sb, current->tgid)) {
+		return -EPERM;
+	}
 
 	vfs_lock_acquire(old_dentry->d_sb, &unlock, op);
 
